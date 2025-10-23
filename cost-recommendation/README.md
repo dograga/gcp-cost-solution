@@ -4,7 +4,8 @@ This Cloud Run job collects Google Cloud cost optimization recommendations from 
 
 ## Features
 
-- **Multi-Project Support**: Automatically discovers and processes all accessible GCP projects
+- **Flexible Scope**: Run at project, folder, or organization level
+- **Multi-Project Support**: Automatically discovers and processes all projects within the specified scope
 - **All Recommender Types**: By default, collects ALL available recommendation types from GCP (30+ types)
 - **Comprehensive Coverage**: Includes recommendations for:
   - Compute Engine (VMs, disks, IPs, commitments, machine types)
@@ -42,6 +43,8 @@ This Cloud Run job collects Google Cloud cost optimization recommendations from 
 |----------|----------|---------|-------------|
 | `ENVIRONMENT` | No | `dev` | Environment name (dev, uat, prd) |
 | `GCP_PROJECT_ID` | Yes | - | GCP project ID where Firestore data will be stored |
+| `SCOPE_TYPE` | No | `project` | Scope level: `project`, `folder`, or `organization` |
+| `SCOPE_ID` | No | `GCP_PROJECT_ID` | Project ID, Folder ID, or Organization ID to collect recommendations from |
 | `FIRESTORE_DATABASE` | No | `(default)` | Firestore database name |
 | `FIRESTORE_COLLECTION` | No | `cost_recommendations` | Firestore collection name |
 | `RECOMMENDER_TYPES` | No | Empty (all types) | Comma-separated list of specific recommender types to fetch. **Leave empty to fetch ALL types (recommended)** |
@@ -100,6 +103,58 @@ RECOMMENDER_TYPES=google.compute.instance.MachineTypeRecommender,google.cloudsql
 ```
 
 **Recommendation**: Leave `RECOMMENDER_TYPES` empty to collect all types and let your application filter what's relevant.
+
+## Running at Different Scopes
+
+The job can run at three different scope levels:
+
+### 1. Project Level (Default)
+
+Collect recommendations for a single project:
+
+```bash
+SCOPE_TYPE=project
+SCOPE_ID=my-project-id
+```
+
+### 2. Folder Level
+
+Collect recommendations for all projects within a folder:
+
+```bash
+SCOPE_TYPE=folder
+SCOPE_ID=123456789  # or folders/123456789
+```
+
+**Required Permissions**:
+- `resourcemanager.projects.list` on the folder
+- `recommender.*.list` and `recommender.*.get` on all projects in the folder
+
+### 3. Organization Level
+
+Collect recommendations for all projects within an organization:
+
+```bash
+SCOPE_TYPE=organization
+SCOPE_ID=987654321  # or organizations/987654321
+```
+
+**Required Permissions**:
+- `resourcemanager.projects.list` on the organization
+- `recommender.*.list` and `recommender.*.get` on all projects in the organization
+
+### Finding Your Folder or Organization ID
+
+```bash
+# List folders
+gcloud resource-manager folders list --organization=YOUR_ORG_ID
+
+# Get organization ID
+gcloud organizations list
+
+# List projects in a folder
+gcloud projects list --filter="parent.id=FOLDER_ID"
+```
 
 ## Firestore Document Structure
 
@@ -176,10 +231,44 @@ gcloud run jobs create cost-recommendation-collector \
   --service-account recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com \
   --set-env-vars ENVIRONMENT=${ENVIRONMENT} \
   --set-env-vars GCP_PROJECT_ID=${PROJECT_ID} \
+  --set-env-vars SCOPE_TYPE=project \
+  --set-env-vars SCOPE_ID=${PROJECT_ID} \
   --set-env-vars FIRESTORE_DATABASE="(default)" \
   --set-env-vars FIRESTORE_COLLECTION=cost_recommendations \
   --max-retries 3 \
   --task-timeout 30m
+```
+
+**For Folder Level**:
+```bash
+gcloud run jobs create cost-recommendation-collector \
+  --image gcr.io/${PROJECT_ID}/cost-recommendation-collector:latest \
+  --region us-central1 \
+  --service-account recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com \
+  --set-env-vars ENVIRONMENT=${ENVIRONMENT} \
+  --set-env-vars GCP_PROJECT_ID=${PROJECT_ID} \
+  --set-env-vars SCOPE_TYPE=folder \
+  --set-env-vars SCOPE_ID=YOUR_FOLDER_ID \
+  --set-env-vars FIRESTORE_DATABASE="(default)" \
+  --set-env-vars FIRESTORE_COLLECTION=cost_recommendations \
+  --max-retries 3 \
+  --task-timeout 60m
+```
+
+**For Organization Level**:
+```bash
+gcloud run jobs create cost-recommendation-collector \
+  --image gcr.io/${PROJECT_ID}/cost-recommendation-collector:latest \
+  --region us-central1 \
+  --service-account recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com \
+  --set-env-vars ENVIRONMENT=${ENVIRONMENT} \
+  --set-env-vars GCP_PROJECT_ID=${PROJECT_ID} \
+  --set-env-vars SCOPE_TYPE=organization \
+  --set-env-vars SCOPE_ID=YOUR_ORG_ID \
+  --set-env-vars FIRESTORE_DATABASE="(default)" \
+  --set-env-vars FIRESTORE_COLLECTION=cost_recommendations \
+  --max-retries 3 \
+  --task-timeout 120m
 ```
 
 ### 4. Schedule with Cloud Scheduler
@@ -221,8 +310,13 @@ gcloud organizations add-iam-policy-binding YOUR_ORG_ID \
   --member="serviceAccount:recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/recommender.viewer"
 
-# Grant project viewer role to list projects
+# Grant project viewer role to list projects (for folder/org level)
 gcloud organizations add-iam-policy-binding YOUR_ORG_ID \
+  --member="serviceAccount:recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/browser"
+
+# For folder level, grant permissions on the folder
+gcloud resource-manager folders add-iam-policy-binding YOUR_FOLDER_ID \
   --member="serviceAccount:recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/browser"
 
@@ -231,6 +325,8 @@ gcloud projects add-iam-policy-binding ${PROJECT_ID} \
   --member="serviceAccount:recommendation-collector@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/datastore.user"
 ```
+
+**Note**: For folder or organization level collection, the service account needs permissions on all projects within that scope.
 
 ## Monitoring
 

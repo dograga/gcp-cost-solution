@@ -23,6 +23,12 @@ GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
 if not GCP_PROJECT_ID:
     raise ValueError(f"GCP_PROJECT_ID must be set in .env.{ENVIRONMENT} or environment variables")
 
+# Scope Configuration (Project, Folder, or Organization)
+# SCOPE_TYPE: 'project', 'folder', or 'organization'
+SCOPE_TYPE = os.environ.get('SCOPE_TYPE', 'project').lower()
+# SCOPE_ID: Project ID, Folder ID (folders/123456), or Org ID (organizations/123456)
+SCOPE_ID = os.environ.get('SCOPE_ID', GCP_PROJECT_ID)
+
 # Firestore Configuration
 FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', '(default)')
 FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'cost_recommendations')
@@ -43,6 +49,8 @@ LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 CONFIG = {
     'environment': ENVIRONMENT,
     'gcp_project_id': GCP_PROJECT_ID,
+    'scope_type': SCOPE_TYPE,
+    'scope_id': SCOPE_ID,
     'firestore_database': FIRESTORE_DATABASE,
     'firestore_collection': FIRESTORE_COLLECTION,
     'recommender_types': RECOMMENDER_TYPES,

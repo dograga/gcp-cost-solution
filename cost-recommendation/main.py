@@ -51,28 +51,67 @@ class CostRecommendationCollector:
     
     def get_all_projects(self) -> List[str]:
         """
-        Retrieve all accessible GCP projects.
+        Retrieve all accessible GCP projects based on scope configuration.
+        Supports project, folder, and organization level collection.
         
         Returns:
             List of project IDs
         """
-        logger.info("Fetching all accessible projects...")
+        scope_type = config.SCOPE_TYPE
+        scope_id = config.SCOPE_ID
+        
+        logger.info(f"Fetching projects for scope: {scope_type} = {scope_id}")
         projects = []
         
         try:
-            request = resourcemanager_v3.ListProjectsRequest()
-            page_result = self.projects_client.list_projects(request=request)
+            if scope_type == 'project':
+                # Single project mode
+                logger.info(f"Running in project mode for: {scope_id}")
+                return [scope_id]
             
-            for project in page_result:
-                # Only include active projects
-                if project.state == resourcemanager_v3.Project.State.ACTIVE:
-                    # Extract project ID from the name (format: projects/PROJECT_ID)
-                    project_id = project.name.split('/')[-1]
-                    projects.append(project_id)
-                    logger.info(f"Found project: {project_id} ({project.display_name})")
+            elif scope_type == 'folder':
+                # Folder mode - get all projects under the folder
+                logger.info(f"Running in folder mode for: {scope_id}")
+                # Ensure folder ID is in correct format
+                if not scope_id.startswith('folders/'):
+                    scope_id = f"folders/{scope_id}"
+                
+                request = resourcemanager_v3.ListProjectsRequest(
+                    parent=scope_id
+                )
+                page_result = self.projects_client.list_projects(request=request)
+                
+                for project in page_result:
+                    if project.state == resourcemanager_v3.Project.State.ACTIVE:
+                        project_id = project.name.split('/')[-1]
+                        projects.append(project_id)
+                        logger.info(f"Found project in folder: {project_id} ({project.display_name})")
+                
+            elif scope_type == 'organization':
+                # Organization mode - get all projects under the organization
+                logger.info(f"Running in organization mode for: {scope_id}")
+                # Ensure org ID is in correct format
+                if not scope_id.startswith('organizations/'):
+                    scope_id = f"organizations/{scope_id}"
+                
+                request = resourcemanager_v3.ListProjectsRequest(
+                    parent=scope_id
+                )
+                page_result = self.projects_client.list_projects(request=request)
+                
+                for project in page_result:
+                    if project.state == resourcemanager_v3.Project.State.ACTIVE:
+                        project_id = project.name.split('/')[-1]
+                        projects.append(project_id)
+                        logger.info(f"Found project in organization: {project_id} ({project.display_name})")
+            
+            else:
+                logger.error(f"Invalid scope type: {scope_type}. Must be 'project', 'folder', or 'organization'")
+                logger.info(f"Falling back to configured project: {self.project_id}")
+                return [self.project_id]
             
             logger.info(f"Total active projects found: {len(projects)}")
-            return projects
+            return projects if projects else [self.project_id]
             
         except exceptions.GoogleAPIError as e:
             logger.error(f"Error fetching projects: {e}")
