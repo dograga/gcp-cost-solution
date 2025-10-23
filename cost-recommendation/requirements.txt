@@ -1,0 +1,5 @@
+google-cloud-recommender==2.14.0
+google-cloud-firestore==2.13.1
+google-cloud-resource-manager==1.10.4
+google-api-core==2.15.0
+python-dotenv==1.0.0
