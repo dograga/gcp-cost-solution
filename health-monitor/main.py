@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""
+Cloud Run Job to collect Google Cloud health events from Service Health API
+and store them in Firestore. Monitors specified regions and maintains regional status.
+"""
+
+import os
+import logging
+import json
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Set
+
+from google.cloud import servicehealth_v1
+from google.cloud import firestore
+from google.api_core import exceptions
+
+# Import configuration
+import config
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Log configuration on startup
+logger.info(f"Starting with environment: {config.ENVIRONMENT}")
+logger.debug(f"Configuration: {config.CONFIG}")
+
+
+class HealthEventMonitor:
+    """Collects Google Cloud health events and stores in Firestore."""
+    
+    def __init__(self):
+        """Initialize the Service Health and Firestore clients."""
+        self.health_client = servicehealth_v1.ServiceHealthClient()
+        self.db = firestore.Client(project=config.GCP_PROJECT_ID, database=config.FIRESTORE_DATABASE)
+        
+        # Get configuration
+        self.organization_id = config.ORGANIZATION_ID
+        self.regions = config.REGIONS
+        self.event_categories = config.EVENT_CATEGORIES
+        self.region_status_collection = config.REGION_STATUS_COLLECTION
+        self.events_collection = config.EVENTS_COLLECTION
+        
+        logger.info(f"Initialized HealthEventMonitor for organization: {self.organization_id}")
+        logger.info(f"Monitoring regions: {self.regions}")
+        logger.info(f"Target collections: {self.region_status_collection}, {self.events_collection}")
+    
+    def get_organization_events(self) -> List[Dict[str, Any]]:
+        """
+        Fetch all active events for the organization.
+        
+        Returns:
+            List of event records
+        """
+        logger.info("Fetching organization events from Service Health API")
+        all_events = []
+        
+        try:
+            # Construct parent path for organization
+            parent = f"organizations/{self.organization_id}/locations/global"
+            
+            # Create request
+            request = servicehealth_v1.ListOrganizationEventsRequest(
+                parent=parent,
+                # Filter for active events only (exclude CLOSED)
+                filter="state=ACTIVE"
+            )
+            
+            # List events
+            page_result = self.health_client.list_organization_events(request=request)
+            
+            for event in page_result:
+                # Parse event into our format
+                event_record = self._parse_event(event)
+                
+                # Skip CLOSED events (additional safety check)
+                if event_record.get('state') == 'CLOSED':
+                    logger.debug(f"Skipping CLOSED event: {event_record['event_id']}")
+                    continue
+                
+                # Filter by regions if specified
+                if self._should_include_event(event_record):
+                    all_events.append(event_record)
+                    logger.debug(f"Collected event: {event_record['event_id']} - {event_record['title']}")
+            
+            logger.info(f"Collected {len(all_events)} events from Service Health API")
+            return all_events
+            
+        except exceptions.GoogleAPIError as e:
+            logger.error(f"Error fetching organization events: {e}")
+            raise
+    
+    def _should_include_event(self, event_record: Dict[str, Any]) -> bool:
+        """
+        Check if event should be included based on region filters.
+        
+        Args:
+            event_record: Event record dictionary
+            
+        Returns:
+            True if event should be included
+        """
+        event_locations = event_record.get('locations', [])
+        
+        # If no locations specified, it's a global event
+        if not event_locations:
+            return 'global' in self.regions
+        
+        # Check if any event location matches our monitored regions
+        for location in event_locations:
+            # Extract region from location (e.g., "us-central1-a" -> "us-central1")
+            region = location.split('-')[0:2]
+            region = '-'.join(region) if len(region) >= 2 else location
+            
+            if region in self.regions or location in self.regions:
+                return True
+        
+        # Check for global in locations
+        if 'global' in [loc.lower() for loc in event_locations]:
+            return 'global' in self.regions
+        
+        return False
+    
+    def _parse_event(self, event: servicehealth_v1.OrganizationEvent) -> Dict[str, Any]:
+        """
+        Parse an event object into a dictionary.
+        
+        Args:
+            event: The OrganizationEvent object
+            
+        Returns:
+            Dictionary with event data
+        """
+        # Extract event ID from name (format: organizations/{org}/locations/{loc}/organizationEvents/{id})
+        event_id = event.name.split('/')[-1]
+        
+        # Parse event impacts
+        impacts = []
+        location_strings = []
+        for impact in event.event_impacts:
+            # Extract location string from Location object
+            location_str = None
+            if hasattr(impact, 'location') and impact.location:
+                # Location object has a location_name attribute
+                if hasattr(impact.location, 'location_name'):
+                    location_str = impact.location.location_name
+                else:
+                    location_str = str(impact.location)
+            
+            # Extract product string from Product object
+            product_str = None
+            if hasattr(impact, 'product') and impact.product:
+                # Product object has a product_name attribute
+                if hasattr(impact.product, 'product_name'):
+                    product_str = impact.product.product_name
+                else:
+                    product_str = str(impact.product)
+            
+            impacts.append({
+                'product': product_str,
+                'location': location_str,
+            })
+            
+            if location_str:
+                location_strings.append(location_str)
+        
+        # Extract unique locations
+        locations = list(set(location_strings))
+        
+        # Determine affected regions
+        affected_regions = self._extract_regions_from_locations(locations)
+        
+        return {
+            'event_id': event_id,
+            'event_name': event.name,
+            'title': event.title,
+            'description': event.description if hasattr(event, 'description') else None,
+            'category': event.category.name if event.category else None,
+            'state': event.state.name if event.state else None,
+            'detailed_category': event.detailed_category.name if hasattr(event, 'detailed_category') and event.detailed_category else None,
+            'detailed_state': event.detailed_state.name if hasattr(event, 'detailed_state') and event.detailed_state else None,
+            'start_time': event.start_time.isoformat() if event.start_time else None,
+            'end_time': event.end_time.isoformat() if event.end_time else None,
+            'update_time': event.update_time.isoformat() if event.update_time else None,
+            'impacts': impacts,
+            'locations': locations,
+            'affected_regions': affected_regions,
+            'collected_at': datetime.now(timezone.utc).isoformat(),
+        }
+    
+    def _extract_regions_from_locations(self, locations: List[str]) -> List[str]:
+        """
+        Extract region names from location strings.
+        
+        Args:
+            locations: List of location strings
+            
+        Returns:
+            List of region names
+        """
+        regions = set()
+        
+        for location in locations:
+            if not location:
+                continue
+            
+            location_lower = location.lower()
+            
+            # Check for global
+            if location_lower == 'global':
+                regions.add('global')
+                continue
+            
+            # Extract region from zone (e.g., "asia-southeast1-a" -> "asia-southeast1")
+            parts = location.split('-')
+            if len(parts) >= 2:
+                region = '-'.join(parts[0:2])
+                regions.add(region)
+            else:
+                regions.add(location)
+        
+        return list(regions)
+    
+    def save_events_to_firestore(self, events: List[Dict[str, Any]]) -> Set[str]:
+        """
+        Save events to Firestore events collection.
+        
+        Args:
+            events: List of event records
+            
+        Returns:
+            Set of event IDs that were saved
+        """
+        if not events:
+            logger.info("No events to save")
+            return set()
+        
+        try:
+            collection_ref = self.db.collection(self.events_collection)
+            batch = self.db.batch()
+            batch_count = 0
+            saved_event_ids = set()
+            
+            for event in events:
+                # Use event_id as document ID for idempotency
+                doc_id = event['event_id']
+                doc_ref = collection_ref.document(doc_id)
+                
+                batch.set(doc_ref, event)
+                batch_count += 1
+                saved_event_ids.add(doc_id)
+                
+                # Firestore batch limit is 500 operations
+                if batch_count >= 500:
+                    batch.commit()
+                    logger.debug(f"Committed batch of {batch_count} events")
+                    batch = self.db.batch()
+                    batch_count = 0
+            
+            # Commit remaining records
+            if batch_count > 0:
+                batch.commit()
+            
+            logger.info(f"Successfully saved {len(saved_event_ids)} events to Firestore")
+            return saved_event_ids
+                
+        except Exception as e:
+            logger.error(f"Error saving events to Firestore: {e}")
+            raise
+    
+    def cleanup_old_events(self, current_event_ids: Set[str]):
+        """
+        Remove events from Firestore that are no longer in the current ingestion.
+        
+        Args:
+            current_event_ids: Set of event IDs from current ingestion
+        """
+        try:
+            collection_ref = self.db.collection(self.events_collection)
+            
+            # Get all existing event IDs
+            existing_docs = collection_ref.stream()
+            existing_event_ids = set()
+            docs_to_delete = []
+            
+            for doc in existing_docs:
+                existing_event_ids.add(doc.id)
+                if doc.id not in current_event_ids:
+                    docs_to_delete.append(doc.id)
+            
+            # Delete old events
+            if docs_to_delete:
+                batch = self.db.batch()
+                batch_count = 0
+                
+                for doc_id in docs_to_delete:
+                    doc_ref = collection_ref.document(doc_id)
+                    batch.delete(doc_ref)
+                    batch_count += 1
+                    
+                    if batch_count >= 500:
+                        batch.commit()
+                        batch = self.db.batch()
+                        batch_count = 0
+                
+                if batch_count > 0:
+                    batch.commit()
+                
+                logger.info(f"Removed {len(docs_to_delete)} old events from Firestore")
+            else:
+                logger.info("No old events to remove")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up old events: {e}")
+            raise
+    
+    def cleanup_old_regions(self):
+        """
+        Remove region status documents for regions that are no longer monitored.
+        """
+        try:
+            collection_ref = self.db.collection(self.region_status_collection)
+            
+            # Get all existing region documents
+            existing_docs = collection_ref.stream()
+            docs_to_delete = []
+            
+            for doc in existing_docs:
+                if doc.id not in self.regions:
+                    docs_to_delete.append(doc.id)
+            
+            # Delete old regions
+            if docs_to_delete:
+                batch = self.db.batch()
+                batch_count = 0
+                
+                for doc_id in docs_to_delete:
+                    doc_ref = collection_ref.document(doc_id)
+                    batch.delete(doc_ref)
+                    batch_count += 1
+                    logger.info(f"Removing old region: {doc_id}")
+                    
+                    if batch_count >= 500:
+                        batch.commit()
+                        batch = self.db.batch()
+                        batch_count = 0
+                
+                if batch_count > 0:
+                    batch.commit()
+                
+                logger.info(f"Removed {len(docs_to_delete)} old regions from Firestore")
+            else:
+                logger.debug("No old regions to remove")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up old regions: {e}")
+            raise
+    
+    def update_region_status(self, events: List[Dict[str, Any]]):
+        """
+        Update region status collection based on current events.
+        
+        Args:
+            events: List of event records
+        """
+        try:
+            # Count events per region
+            region_event_counts = {}
+            
+            # Initialize all monitored regions with 0 events
+            for region in self.regions:
+                region_event_counts[region] = 0
+            
+            # Count events per region
+            for event in events:
+                affected_regions = event.get('affected_regions', [])
+                
+                # If no specific regions, count as global
+                if not affected_regions:
+                    affected_regions = ['global']
+                
+                for region in affected_regions:
+                    if region in region_event_counts:
+                        region_event_counts[region] += 1
+                    else:
+                        # Region not in monitored list but has events
+                        logger.warning(f"Event affects unmonitored region: {region}")
+                        region_event_counts[region] = 1
+            
+            # Update Firestore
+            collection_ref = self.db.collection(self.region_status_collection)
+            batch = self.db.batch()
+            batch_count = 0
+            
+            for region, event_count in region_event_counts.items():
+                doc_ref = collection_ref.document(region)
+                
+                status_data = {
+                    'region': region,
+                    'status': 'unhealthy' if event_count > 0 else 'healthy',
+                    'event_count': event_count,
+                    'last_updated': datetime.now(timezone.utc).isoformat(),
+                }
+                
+                batch.set(doc_ref, status_data)
+                batch_count += 1
+                
+                if batch_count >= 500:
+                    batch.commit()
+                    batch = self.db.batch()
+                    batch_count = 0
+            
+            if batch_count > 0:
+                batch.commit()
+            
+            logger.info(f"Updated status for {len(region_event_counts)} regions")
+            
+            # Log detailed summary
+            for region, count in region_event_counts.items():
+                status = 'unhealthy' if count > 0 else 'healthy'
+                logger.info(f"  {region}: {status} ({count} events)")
+            
+            # Log summary
+            unhealthy_regions = [r for r, c in region_event_counts.items() if c > 0]
+            if unhealthy_regions:
+                logger.warning(f"Unhealthy regions: {unhealthy_regions}")
+            else:
+                logger.info("✅ All monitored regions are healthy")
+                
+        except Exception as e:
+            logger.error(f"Error updating region status: {e}")
+            raise
+    
+    def run(self):
+        """
+        Main execution method to collect health events and update status.
+        """
+        logger.info("Starting health event collection")
+        
+        try:
+            # Fetch events from Service Health API
+            events = self.get_organization_events()
+            
+            # Save events to Firestore
+            current_event_ids = self.save_events_to_firestore(events)
+            
+            # Clean up old events that are no longer active
+            self.cleanup_old_events(current_event_ids)
+            
+            # Clean up old regions that are no longer monitored
+            self.cleanup_old_regions()
+            
+            # Update region status
+            self.update_region_status(events)
+            
+            logger.info("Health event collection completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Job failed with error: {e}")
+            raise
+
+
+def main():
+    """Main entry point for the Cloud Run job."""
+    logger.info("=" * 80)
+    logger.info("Starting GCP Health Event Monitor Job")
+    logger.info("=" * 80)
+    
+    try:
+        monitor = HealthEventMonitor()
+        monitor.run()
+        logger.info("Health event monitoring completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Job failed with error: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
