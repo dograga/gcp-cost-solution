@@ -168,10 +168,6 @@ class CostRecommendationCollector:
             'google.cloudsql.instance.OverprovisionedRecommender',
             'google.cloudsql.instance.OutOfDiskRecommender',
             
-            # IAM
-            'google.iam.policy.Recommender',
-            'google.resourcemanager.projectUtilization.Recommender',
-            
             # Logging
             'google.logging.productSuggestion.ContainerRecommender',
             
@@ -245,11 +241,6 @@ class CostRecommendationCollector:
             'global',  # Global recommendations apply to all regions
             # Singapore
             'asia-southeast1',  # Singapore
-            # India
-            'asia-south1',  # Mumbai, India
-            'asia-south2',  # Delhi, India
-            # Indonesia
-            'asia-southeast2',  # Jakarta, Indonesia
         ]
         
         # Iterate through all recommender types
@@ -278,11 +269,17 @@ class CostRecommendationCollector:
                 except exceptions.NotFound:
                     # This location doesn't have this recommender type - this is normal
                     continue
-                except exceptions.PermissionDenied as e:
-                    logger.debug(f"Permission denied for {recommender_type} in {location}: {e}")
+                except exceptions.PermissionDenied:
+                    # Permission denied is expected for services not enabled or insufficient permissions
+                    # Only log at debug level without the full error details to reduce noise
+                    logger.debug(f"Permission denied for {recommender_type} in {location} (service may not be enabled or requires additional permissions)")
+                    continue
+                except exceptions.InvalidArgument:
+                    # Invalid argument usually means the recommender doesn't support this location
+                    # This is expected and normal - skip silently
                     continue
                 except Exception as e:
-                    logger.debug(f"Error fetching {recommender_type} for {location}: {e}")
+                    logger.debug(f"Error fetching {recommender_type} for {location}: {type(e).__name__}")
                     continue
         
         logger.info(f"Collected {len(all_recommendations)} recommendations for project {project_id}")
@@ -378,6 +375,7 @@ class CostRecommendationCollector:
             'xor_group_id': recommendation.xor_group_id,
             'content': str(recommendation.content) if recommendation.content else None,
             'collected_at': datetime.utcnow().isoformat(),
+            'updated_at': datetime.utcnow().isoformat(),
         }
     
     def save_recommendations_to_firestore(self, records: List[Dict[str, Any]]):
@@ -415,6 +413,12 @@ class CostRecommendationCollector:
                         firestore_record['collected_at'] = firestore_record['collected_at']
                     else:
                         firestore_record['collected_at'] = firestore_record['collected_at'].isoformat()
+                
+                if 'updated_at' in firestore_record and firestore_record['updated_at']:
+                    if isinstance(firestore_record['updated_at'], str):
+                        firestore_record['updated_at'] = firestore_record['updated_at']
+                    else:
+                        firestore_record['updated_at'] = firestore_record['updated_at'].isoformat()
                 
                 batch.set(doc_ref, firestore_record)
                 batch_count += 1
