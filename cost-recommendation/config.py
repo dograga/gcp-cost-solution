@@ -33,6 +33,13 @@ SCOPE_ID = os.environ.get('SCOPE_ID', GCP_PROJECT_ID)
 FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', '(default)')
 FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'cost_recommendations')
 
+# Project Inventory Configuration
+# Set USE_INVENTORY_COLLECTION=true to read projects from Firestore inventory
+USE_INVENTORY_COLLECTION = True
+INVENTORY_DATABASE = "dashboard"
+INVENTORY_COLLECTION = "projects"
+INVENTORY_PROJECT_ID_FIELD = "project_id"
+
 # Recommender Configuration
 # Recommender types to fetch (comma-separated)
 # Leave empty or set to empty string to fetch ALL available recommender types
@@ -41,6 +48,12 @@ RECOMMENDER_TYPES = [r.strip() for r in RECOMMENDER_TYPES_STR.split(',') if r.st
 
 # Filter recommendations by state (ACTIVE, CLAIMED, SUCCEEDED, FAILED, DISMISSED)
 RECOMMENDATION_STATE_FILTER = os.environ.get('RECOMMENDATION_STATE_FILTER', 'ACTIVE')
+
+# Performance Configuration
+# Number of parallel threads for processing projects
+MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '10'))
+# Batch size for saving recommendations to Firestore
+FIRESTORE_BATCH_SIZE = int(os.environ.get('FIRESTORE_BATCH_SIZE', '500'))
 
 # Logging Configuration
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
@@ -53,7 +66,13 @@ CONFIG = {
     'scope_id': SCOPE_ID,
     'firestore_database': FIRESTORE_DATABASE,
     'firestore_collection': FIRESTORE_COLLECTION,
+    'use_inventory_collection': USE_INVENTORY_COLLECTION,
+    'inventory_database': INVENTORY_DATABASE,
+    'inventory_collection': INVENTORY_COLLECTION,
+    'inventory_project_id_field': INVENTORY_PROJECT_ID_FIELD,
     'recommender_types': RECOMMENDER_TYPES,
     'recommendation_state_filter': RECOMMENDATION_STATE_FILTER,
+    'max_workers': MAX_WORKERS,
+    'firestore_batch_size': FIRESTORE_BATCH_SIZE,
     'log_level': LOG_LEVEL,
 }

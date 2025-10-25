@@ -9,6 +9,8 @@ import logging
 import json
 from datetime import datetime
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from google.cloud import recommender_v1
 from google.cloud import firestore
@@ -45,18 +47,70 @@ class CostRecommendationCollector:
         self.recommender_types = [r.strip() for r in config.RECOMMENDER_TYPES]
         self.state_filter = config.RECOMMENDATION_STATE_FILTER
         
+        # Inventory configuration
+        self.use_inventory = config.USE_INVENTORY_COLLECTION
+        self.inventory_db_name = config.INVENTORY_DATABASE
+        self.inventory_collection_name = config.INVENTORY_COLLECTION
+        self.inventory_project_id_field = config.INVENTORY_PROJECT_ID_FIELD
+        
+        # Performance configuration
+        self.max_workers = config.MAX_WORKERS
+        self.batch_size = config.FIRESTORE_BATCH_SIZE
+        
         logger.info(f"Initialized CostRecommendationCollector for project: {self.project_id}")
         logger.info(f"Target Firestore collection: {self.collection_name}")
-        logger.info(f"Recommender types: {self.recommender_types}")
+        logger.info(f"Use inventory collection: {self.use_inventory}")
+        if self.use_inventory:
+            logger.info(f"Inventory source: {self.inventory_db_name}/{self.inventory_collection_name}")
+        logger.info(f"Recommender types: {len(self.recommender_types)} types configured")
+        logger.info(f"Performance: {self.max_workers} workers, batch size {self.batch_size}")
     
-    def get_all_projects(self) -> List[str]:
+    def get_projects_from_inventory(self) -> List[str]:
         """
-        Retrieve all accessible GCP projects based on scope configuration.
-        Supports project, folder, and organization level collection.
+        Retrieve project IDs from Firestore inventory collection.
         
         Returns:
             List of project IDs
         """
+        logger.info(f"Reading projects from inventory: {self.inventory_db_name}/{self.inventory_collection_name}")
+        projects = []
+        
+        try:
+            # Connect to inventory database (may be different from recommendations DB)
+            inventory_db = firestore.Client(project=config.GCP_PROJECT_ID, database=self.inventory_db_name)
+            collection_ref = inventory_db.collection(self.inventory_collection_name)
+            
+            # Read all documents from the inventory collection
+            docs = collection_ref.stream()
+            
+            for doc in docs:
+                doc_data = doc.to_dict()
+                if self.inventory_project_id_field in doc_data:
+                    project_id = doc_data[self.inventory_project_id_field]
+                    projects.append(project_id)
+                    logger.debug(f"Found project from inventory: {project_id}")
+                else:
+                    logger.warning(f"Document {doc.id} missing field '{self.inventory_project_id_field}'")
+            
+            logger.info(f"Total projects loaded from inventory: {len(projects)}")
+            return projects
+            
+        except Exception as e:
+            logger.error(f"Error reading from inventory collection: {e}")
+            raise
+    
+    def get_all_projects(self) -> List[str]:
+        """
+        Retrieve all accessible GCP projects based on scope configuration.
+        Supports project, folder, organization level collection, or inventory collection.
+        
+        Returns:
+            List of project IDs
+        """
+        # If using inventory collection, read from there
+        if self.use_inventory:
+            return self.get_projects_from_inventory()
+        
         scope_type = config.SCOPE_TYPE
         scope_id = config.SCOPE_ID
         
@@ -86,6 +140,8 @@ class CostRecommendationCollector:
                         project_id = project.name.split('/')[-1]
                         projects.append(project_id)
                         logger.info(f"Found project in folder: {project_id} ({project.display_name})")
+                    else:
+                        logger.debug(f"Skipping project {project.name.split('/')[-1]} with state: {project.state.name}")
                 
             elif scope_type == 'organization':
                 # Organization mode - get all projects under the organization
@@ -94,16 +150,32 @@ class CostRecommendationCollector:
                 if not scope_id.startswith('organizations/'):
                     scope_id = f"organizations/{scope_id}"
                 
-                request = resourcemanager_v3.ListProjectsRequest(
-                    parent=scope_id
-                )
-                page_result = self.projects_client.list_projects(request=request)
+                # List ALL projects in the organization using a search query
+                # This approach gets all projects regardless of folder structure
+                logger.info(f"Searching for all projects in organization {scope_id}")
                 
+                # Use search query to find all projects in the organization
+                search_query = f"parent:{scope_id}"
+                
+                request = resourcemanager_v3.SearchProjectsRequest(
+                    query=search_query
+                )
+                
+                logger.debug(f"Searching projects with query: {search_query}")
+                page_result = self.projects_client.search_projects(request=request)
+                
+                total_found = 0
                 for project in page_result:
+                    total_found += 1
+                    logger.debug(f"Found project: {project.name} (state: {project.state.name}, parent: {project.parent})")
                     if project.state == resourcemanager_v3.Project.State.ACTIVE:
                         project_id = project.name.split('/')[-1]
                         projects.append(project_id)
-                        logger.info(f"Found project in organization: {project_id} ({project.display_name})")
+                        logger.info(f"Found project: {project_id} ({project.display_name}) - Parent: {project.parent}")
+                    else:
+                        logger.debug(f"Skipping project {project.name.split('/')[-1]} with state: {project.state.name}")
+                
+                logger.info(f"Total projects found in organization: {total_found}, Active projects: {len(projects)}")
             
             else:
                 logger.error(f"Invalid scope type: {scope_type}. Must be 'project', 'folder', or 'organization'")
@@ -160,7 +232,6 @@ class CostRecommendationCollector:
             'google.compute.instance.IdleResourceRecommender',
             'google.compute.address.IdleResourceRecommender',
             'google.compute.image.IdleResourceRecommender',
-            'google.compute.commitment.UsageCommitmentRecommender',
             'google.compute.instanceGroupManager.MachineTypeRecommender',
             
             # Cloud SQL
@@ -234,13 +305,33 @@ class CostRecommendationCollector:
         # Discover all available recommender types
         recommender_types = self.discover_recommender_types(project_number)
         logger.info(f"Checking {len(recommender_types)} recommender types for project {project_id}")
+        logger.info(f"Using state filter: {self.state_filter if self.state_filter else 'None (all states)'}")
         
         # Get recommendations for specified locations
         # Focus on Singapore, India, and Indonesia regions
+        # Include both regions and zones since some recommenders (like Compute Engine) are zone-specific
         locations = [
             'global',  # Global recommendations apply to all regions
-            # Singapore
-            'asia-southeast1',  # Singapore
+            # Singapore region and zones
+            'asia-southeast1',  # Singapore region
+            'asia-southeast1-a',  # Singapore zone A
+            'asia-southeast1-b',  # Singapore zone B
+            'asia-southeast1-c',  # Singapore zone C
+            # Indonesia (Jakarta) region and zones
+            'asia-southeast2',  # Jakarta region
+            'asia-southeast2-a',  # Jakarta zone A
+            'asia-southeast2-b',  # Jakarta zone B
+            'asia-southeast2-c',  # Jakarta zone C
+            # India (Mumbai) region and zones
+            'asia-south1',  # Mumbai region
+            'asia-south1-a',  # Mumbai zone A
+            'asia-south1-b',  # Mumbai zone B
+            'asia-south1-c',  # Mumbai zone C
+            # India (Delhi) region and zones
+            'asia-south2',  # Delhi region
+            'asia-south2-a',  # Delhi zone A
+            'asia-south2-b',  # Delhi zone B
+            'asia-south2-c',  # Delhi zone C
         ]
         
         # Iterate through all recommender types
@@ -256,6 +347,7 @@ class CostRecommendationCollector:
                     
                     recommendations = self.recommender_client.list_recommendations(request=request)
                     
+                    rec_count = 0
                     for recommendation in recommendations:
                         record = self._parse_recommendation(
                             recommendation, 
@@ -265,6 +357,10 @@ class CostRecommendationCollector:
                             recommender_type
                         )
                         all_recommendations.append(record)
+                        rec_count += 1
+                    
+                    if rec_count > 0:
+                        logger.debug(f"Found {rec_count} recommendation(s) for {recommender_type} in {location}")
                         
                 except exceptions.NotFound:
                     # This location doesn't have this recommender type - this is normal
@@ -378,15 +474,16 @@ class CostRecommendationCollector:
             'updated_at': datetime.utcnow().isoformat(),
         }
     
-    def save_recommendations_to_firestore(self, records: List[Dict[str, Any]]):
+    def save_recommendations_to_firestore(self, records: List[Dict[str, Any]], show_progress: bool = False):
         """
-        Save recommendation records to Firestore.
+        Save recommendation records to Firestore in batches.
         
         Args:
             records: List of recommendation records to save
+            show_progress: Whether to log progress for each batch
         """
         if not records:
-            logger.info("No records to save")
+            logger.debug("No records to save")
             return
         
         try:
@@ -423,11 +520,12 @@ class CostRecommendationCollector:
                 batch.set(doc_ref, firestore_record)
                 batch_count += 1
                 
-                # Firestore batch limit is 500 operations
-                if batch_count >= 500:
+                # Use configured batch size
+                if batch_count >= self.batch_size:
                     batch.commit()
                     total_saved += batch_count
-                    logger.info(f"Committed batch of {batch_count} documents. Total: {total_saved}")
+                    if show_progress:
+                        logger.info(f"Committed batch of {batch_count} documents. Total: {total_saved}")
                     batch = self.db.batch()
                     batch_count = 0
             
@@ -442,11 +540,19 @@ class CostRecommendationCollector:
             logger.error(f"Error saving to Firestore: {e}")
             raise
     
-    def run(self):
+    def run(self, max_workers=None):
         """
         Main execution method to collect cost recommendations for all projects.
+        Optimized for large-scale processing (100+ projects).
+        
+        Args:
+            max_workers: Number of threads to use for parallel processing (defaults to config.MAX_WORKERS)
         """
+        if max_workers is None:
+            max_workers = self.max_workers
+            
         logger.info("Starting cost recommendation collection")
+        logger.info(f"Performance settings: {max_workers} workers, batch size {self.batch_size}")
         
         try:
             # Ensure Firestore collection is accessible
@@ -459,28 +565,65 @@ class CostRecommendationCollector:
                 logger.warning("No projects found")
                 return
             
-            # Collect recommendations for each project
-            all_recommendations = []
+            # For large-scale processing, save recommendations incrementally
+            # instead of accumulating all in memory
+            total_recommendations = 0
+            lock = threading.Lock()
+            project_batches = []
             
-            for project_id in projects:
-                logger.info(f"Processing project: {project_id}")
-                
+            def process_project(project_id):
+                """Process a single project and save recommendations immediately."""
+                logger.debug(f"Processing project: {project_id}")
                 try:
                     recommendations = self.get_recommendations_for_project(project_id)
-                    all_recommendations.extend(recommendations)
+                    
+                    # Save recommendations immediately if we have any
+                    if recommendations:
+                        with lock:
+                            self.save_recommendations_to_firestore(recommendations, show_progress=False)
+                            nonlocal total_recommendations
+                            total_recommendations += len(recommendations)
+                    
+                    logger.info(f"Completed {project_id}: {len(recommendations)} recommendations")
+                    return len(recommendations)
                 except Exception as e:
                     logger.error(f"Error processing project {project_id}: {e}")
-                    continue
+                    return 0
             
-            # Save all recommendations to Firestore
-            if all_recommendations:
-                self.save_recommendations_to_firestore(all_recommendations)
-                logger.info(
-                    f"Successfully collected and stored {len(all_recommendations)} "
-                    f"cost recommendations"
-                )
-            else:
-                logger.warning("No cost recommendations collected")
+            # Process projects in parallel
+            logger.info(f"Processing {len(projects)} projects with {max_workers} threads")
+            start_time = datetime.utcnow()
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(process_project, project_id): project_id 
+                          for project_id in projects}
+                
+                completed = 0
+                for future in as_completed(futures):
+                    completed += 1
+                    project_id = futures[future]
+                    try:
+                        rec_count = future.result()
+                        # Log progress every 10 projects for large batches
+                        if completed % 10 == 0 or completed == len(projects):
+                            elapsed = (datetime.utcnow() - start_time).total_seconds()
+                            rate = completed / elapsed if elapsed > 0 else 0
+                            eta = (len(projects) - completed) / rate if rate > 0 else 0
+                            logger.info(
+                                f"Progress: {completed}/{len(projects)} projects "
+                                f"({completed*100//len(projects)}%) | "
+                                f"Rate: {rate:.1f} projects/sec | "
+                                f"ETA: {eta/60:.1f} min"
+                            )
+                    except Exception as e:
+                        logger.error(f"Exception for project {project_id}: {e}")
+            
+            elapsed_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(
+                f"Successfully collected and stored {total_recommendations} "
+                f"cost recommendations from {len(projects)} projects "
+                f"in {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)"
+            )
             
         except Exception as e:
             logger.error(f"Error in cost recommendation collection: {e}")
