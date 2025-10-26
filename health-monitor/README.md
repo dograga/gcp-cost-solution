@@ -8,6 +8,7 @@ This Cloud Run job monitors Google Cloud Service Health events for your organiza
 
 - ✅ Monitors organization-level health events via Service Health API
 - ✅ Filters events by region (Singapore, Jakarta, Mumbai, Delhi, Global)
+- ✅ Filters events by GCP products/services (Compute, GKE, Storage, SQL, etc.)
 - ✅ Maintains two Firestore collections:
   - **region_status**: Regional health status summary
   - **health_events**: Detailed event information
@@ -93,6 +94,12 @@ REGIONS=asia-southeast1,asia-southeast2,asia-south1,asia-south2,global
 # Event Categories (leave empty for all)
 EVENT_CATEGORIES=
 
+# Product Filtering (set to True to enable, False to disable)
+FILTER_BY_PRODUCT=True
+
+# Products/Services to Monitor (comma-separated, only used if FILTER_BY_PRODUCT=True)
+PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,Cloud Networking,Cloud Security,Cloud Logging,Cloud DNS,Vertex AI,Cloud Identity,Cloud Billing,Cloud Pub/Sub,Cloud Memorystore,BigQuery,Cloud Dataproc
+
 # Logging
 LOG_LEVEL=INFO
 ```
@@ -106,6 +113,33 @@ LOG_LEVEL=INFO
 | asia-south1 | Mumbai, India |
 | asia-south2 | Delhi, India |
 | global | Global events |
+
+### Product/Service Mapping
+
+The following GCP products/services are monitored:
+
+| Product Name | Service |
+|--------------|---------|
+| Google Compute Engine | Compute VMs |
+| Google Kubernetes Engine | GKE Clusters |
+| Cloud Storage | Object Storage |
+| Cloud SQL | Managed Databases |
+| Cloud Networking | VPC, Load Balancers |
+| Cloud Security | Security Services |
+| Cloud Logging | Logging & Monitoring |
+| Cloud DNS | DNS Management |
+| Vertex AI | AI/ML Platform |
+| Cloud Identity | Identity & Access |
+| Cloud Billing | Billing Services |
+| Cloud Pub/Sub | Messaging |
+| Cloud Memorystore | Redis |
+| BigQuery | Data Warehouse |
+| Cloud Dataproc | Spark/Hadoop |
+
+**Note:** 
+- Set `FILTER_BY_PRODUCT=True` to enable product filtering, `False` to disable
+- Product filtering uses flexible matching (case-insensitive, partial matches)
+- When disabled, all products are monitored regardless of the `PRODUCTS` list
 
 ## Installation
 
@@ -178,9 +212,10 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
 
 1. **Fetch Events**: Queries Service Health API for organization events
 2. **Filter by Region**: Includes only events affecting monitored regions
-3. **Save Events**: Upserts events to `health_events` collection using event ID
-4. **Cleanup**: Removes events that are no longer active
-5. **Update Status**: Calculates event count per region and updates `region_status`
+3. **Filter by Product**: Includes only events affecting monitored GCP services (if specified)
+4. **Save Events**: Upserts events to `health_events` collection using event ID
+5. **Cleanup**: Removes events that are no longer active
+6. **Update Status**: Calculates event count per region and updates `region_status`
 
 ## Event Lifecycle
 
@@ -249,7 +284,9 @@ Example output:
 
 - Check region filter in configuration
 - Verify events affect monitored regions
-- Check event state (only ACTIVE and CLOSED are fetched)
+- Check product filter - ensure the affected services are in your PRODUCTS list
+- Verify events affect monitored products/services
+- Check event state (only ACTIVE events are collected)
 
 ## Cost
 

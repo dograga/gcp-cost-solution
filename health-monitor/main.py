@@ -41,11 +41,18 @@ class HealthEventMonitor:
         self.organization_id = config.ORGANIZATION_ID
         self.regions = config.REGIONS
         self.event_categories = config.EVENT_CATEGORIES
+        self.filter_by_product = config.FILTER_BY_PRODUCT
+        self.products = config.PRODUCTS
         self.region_status_collection = config.REGION_STATUS_COLLECTION
         self.events_collection = config.EVENTS_COLLECTION
         
         logger.info(f"Initialized HealthEventMonitor for organization: {self.organization_id}")
         logger.info(f"Monitoring regions: {self.regions}")
+        if self.filter_by_product:
+            logger.info(f"Product filtering: ENABLED - Monitoring {len(self.products)} products")
+            logger.debug(f"Products: {self.products}")
+        else:
+            logger.info(f"Product filtering: DISABLED - Monitoring all products")
         logger.info(f"Target collections: {self.region_status_collection}, {self.events_collection}")
     
     def get_organization_events(self) -> List[Dict[str, Any]]:
@@ -81,7 +88,7 @@ class HealthEventMonitor:
                     logger.debug(f"Skipping CLOSED event: {event_record['event_id']}")
                     continue
                 
-                # Filter by regions if specified
+                # Filter by regions and products if specified
                 if self._should_include_event(event_record):
                     all_events.append(event_record)
                     logger.debug(f"Collected event: {event_record['event_id']} - {event_record['title']}")
@@ -95,13 +102,36 @@ class HealthEventMonitor:
     
     def _should_include_event(self, event_record: Dict[str, Any]) -> bool:
         """
-        Check if event should be included based on region filters.
+        Check if event should be included based on region and product filters.
         
         Args:
             event_record: Event record dictionary
             
         Returns:
             True if event should be included
+        """
+        # Check region filter
+        region_match = self._matches_region_filter(event_record)
+        if not region_match:
+            return False
+        
+        # Check product filter (only if filtering is enabled)
+        if self.filter_by_product and self.products:
+            product_match = self._matches_product_filter(event_record)
+            if not product_match:
+                return False
+        
+        return True
+    
+    def _matches_region_filter(self, event_record: Dict[str, Any]) -> bool:
+        """
+        Check if event matches region filter.
+        
+        Args:
+            event_record: Event record dictionary
+            
+        Returns:
+            True if event matches region filter
         """
         event_locations = event_record.get('locations', [])
         
@@ -121,6 +151,38 @@ class HealthEventMonitor:
         # Check for global in locations
         if 'global' in [loc.lower() for loc in event_locations]:
             return 'global' in self.regions
+        
+        return False
+    
+    def _matches_product_filter(self, event_record: Dict[str, Any]) -> bool:
+        """
+        Check if event matches product filter.
+        
+        Args:
+            event_record: Event record dictionary
+            
+        Returns:
+            True if event matches product filter
+        """
+        event_impacts = event_record.get('impacts', [])
+        
+        # If no impacts, we can't determine product
+        if not event_impacts:
+            return False
+        
+        # Check if any impact product matches our monitored products
+        for impact in event_impacts:
+            product = impact.get('product')
+            if not product:
+                continue
+            
+            # Check for exact match or partial match (case-insensitive)
+            product_lower = product.lower()
+            for monitored_product in self.products:
+                monitored_lower = monitored_product.lower()
+                # Match if either contains the other (flexible matching)
+                if monitored_lower in product_lower or product_lower in monitored_lower:
+                    return True
         
         return False
     

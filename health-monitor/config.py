@@ -43,6 +43,16 @@ REGIONS = [r.strip() for r in REGIONS_STR.split(',') if r.strip()]
 EVENT_CATEGORIES_STR = os.environ.get('EVENT_CATEGORIES', '')
 EVENT_CATEGORIES = [c.strip() for c in EVENT_CATEGORIES_STR.split(',') if c.strip()] if EVENT_CATEGORIES_STR else []
 
+# Product Filtering Toggle
+# Set to True to enable product filtering, False to disable
+FILTER_BY_PRODUCT_STR = os.environ.get('FILTER_BY_PRODUCT', 'False')
+FILTER_BY_PRODUCT = FILTER_BY_PRODUCT_STR.lower() in ('true', '1', 'yes', 'on')
+
+# Products/Services to Monitor
+# Comma-separated list of GCP products/services (only used if FILTER_BY_PRODUCT is True)
+PRODUCTS_STR = os.environ.get('PRODUCTS', '')
+PRODUCTS = [p.strip() for p in PRODUCTS_STR.split(',') if p.strip()] if PRODUCTS_STR else []
+
 # Logging Configuration
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
@@ -56,5 +66,7 @@ CONFIG = {
     'events_collection': EVENTS_COLLECTION,
     'regions': REGIONS,
     'event_categories': EVENT_CATEGORIES,
+    'filter_by_product': FILTER_BY_PRODUCT,
+    'products': PRODUCTS,
     'log_level': LOG_LEVEL,
 }
