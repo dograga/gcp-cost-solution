@@ -72,7 +72,7 @@ class HealthEventMonitor:
             # Create request
             request = servicehealth_v1.ListOrganizationEventsRequest(
                 parent=parent,
-                # Filter for active events only (exclude CLOSED)
+                # Filter for active events only (exclude CLOSED and RESOLVED)
                 filter="state=ACTIVE"
             )
             
@@ -83,9 +83,9 @@ class HealthEventMonitor:
                 # Parse event into our format
                 event_record = self._parse_event(event)
                 
-                # Skip CLOSED events (additional safety check)
-                if event_record.get('state') == 'CLOSED':
-                    logger.debug(f"Skipping CLOSED event: {event_record['event_id']}")
+                # Skip CLOSED and RESOLVED events (additional safety check)
+                if event_record.get('state') in ['CLOSED', 'RESOLVED']:
+                    logger.debug(f"Skipping {event_record.get('state')} event: {event_record['event_id']}")
                     continue
                 
                 # Filter by regions and products if specified
@@ -289,6 +289,7 @@ class HealthEventMonitor:
     def save_events_to_firestore(self, events: List[Dict[str, Any]]) -> Set[str]:
         """
         Save events to Firestore events collection.
+        Preserves 'ignore' and 'comment' fields if they already exist.
         
         Args:
             events: List of event records
@@ -311,7 +312,15 @@ class HealthEventMonitor:
                 doc_id = event['event_id']
                 doc_ref = collection_ref.document(doc_id)
                 
-                batch.set(doc_ref, event)
+                # Add default values for portal-managed fields if not present
+                if 'ignore' not in event:
+                    event['ignore'] = False
+                if 'comment' not in event:
+                    event['comment'] = ''
+                
+                # Use merge=True to preserve existing 'ignore' and 'comment' fields
+                # This prevents overwriting values set by the cloud platform team
+                batch.set(doc_ref, event, merge=True)
                 batch_count += 1
                 saved_event_ids.add(doc_id)
                 

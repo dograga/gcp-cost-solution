@@ -15,7 +15,7 @@ Add these variables to your `.env.dev` or `.env.prod` file:
 FILTER_BY_PRODUCT=True
 
 # List of products to monitor (only used when FILTER_BY_PRODUCT=True)
-PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,Cloud Networking,Cloud Security,Cloud Logging,Cloud DNS,Vertex AI,Cloud Identity,Cloud Billing,Cloud Pub/Sub,Cloud Memorystore,BigQuery,Cloud Dataproc
+PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,Cloud Networking,Cloud Security,Cloud Logging,Cloud DNS,Vertex AI,Cloud Identity,Cloud Billing,Cloud Pub/Sub,Cloud Memorystore,BigQuery,Cloud Dataproc,Cloud Load Balancing,Cloud Functions,Cloud Run,Cloud CDN,Cloud Armor,Cloud NAT,Cloud VPN,Cloud Interconnect,Cloud Router,Firestore,Cloud Spanner,Cloud Bigtable,Cloud Dataflow,Cloud Composer,Cloud Tasks,Cloud Scheduler
 ```
 
 ### FILTER_BY_PRODUCT Flag
@@ -27,21 +27,50 @@ PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,
 
 The following services are configured by default:
 
+#### Compute & Containers
 1. **Google Compute Engine** - Compute VMs and instances
 2. **Google Kubernetes Engine** - GKE clusters
-3. **Cloud Storage** - Object storage buckets
-4. **Cloud SQL** - Managed database instances
-5. **Cloud Networking** - VPC, Load Balancers, networking services
-6. **Cloud Security** - Security and compliance services
-7. **Cloud Logging** - Logging and monitoring
-8. **Cloud DNS** - DNS management
-9. **Vertex AI** - AI/ML platform
-10. **Cloud Identity** - Identity and access management
-11. **Cloud Billing** - Billing services
-12. **Cloud Pub/Sub** - Messaging and event streaming
-13. **Cloud Memorystore** - Redis managed service
-14. **BigQuery** - Data warehouse and analytics
-15. **Cloud Dataproc** - Spark and Hadoop clusters
+3. **Cloud Run** - Serverless containers
+4. **Cloud Functions** - Serverless functions
+
+#### Networking
+5. **Cloud Networking** - VPC and networking services
+6. **Cloud Load Balancing** - HTTP(S), TCP/SSL, and internal load balancers
+7. **Cloud CDN** - Content delivery network
+8. **Cloud Armor** - DDoS protection and WAF
+9. **Cloud NAT** - Network address translation
+10. **Cloud VPN** - Virtual private network
+11. **Cloud Interconnect** - Dedicated connectivity
+12. **Cloud Router** - Dynamic routing
+13. **Cloud DNS** - DNS management
+
+#### Storage & Databases
+14. **Cloud Storage** - Object storage buckets
+15. **Cloud SQL** - Managed relational databases
+16. **Firestore** - NoSQL document database
+17. **Cloud Spanner** - Globally distributed database
+18. **Cloud Bigtable** - NoSQL wide-column database
+19. **Cloud Memorystore** - Redis and Memcached managed service
+
+#### Data & Analytics
+20. **BigQuery** - Data warehouse and analytics
+21. **Cloud Dataproc** - Spark and Hadoop clusters
+22. **Cloud Dataflow** - Stream and batch data processing
+23. **Cloud Composer** - Managed Apache Airflow
+
+#### Operations & Management
+24. **Cloud Logging** - Logging and monitoring
+25. **Cloud Security** - Security and compliance services
+26. **Cloud Billing** - Billing services
+27. **Cloud Identity** - Identity and access management
+28. **Cloud Tasks** - Asynchronous task execution
+29. **Cloud Scheduler** - Cron job scheduling
+
+#### AI & ML
+30. **Vertex AI** - AI/ML platform
+
+#### Messaging
+31. **Cloud Pub/Sub** - Messaging and event streaming
 
 ## How It Works
 

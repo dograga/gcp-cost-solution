@@ -66,11 +66,19 @@ Stores detailed information about each active event.
   ],
   "locations": ["asia-southeast1"],
   "affected_regions": ["asia-southeast1"],
-  "collected_at": "2025-10-25T12:00:00Z"
+  "collected_at": "2025-10-25T12:00:00Z",
+  "ignore": false,
+  "comment": ""
 }
 ```
 
 **Document ID:** Event ID (e.g., "abc123")
+
+**Portal-Managed Fields:**
+- `ignore` (boolean, default: `false`) - Set to `true` by cloud platform team to ignore this event in dashboards/alerts
+- `comment` (string, default: `""`) - Notes from cloud platform team about the event (e.g., "Known issue, fix in progress")
+
+**Important:** These fields are preserved during updates. When the job re-ingests events, it uses `merge=True` to avoid overwriting values set by the internal portal.
 
 ## Configuration
 
@@ -98,7 +106,7 @@ EVENT_CATEGORIES=
 FILTER_BY_PRODUCT=True
 
 # Products/Services to Monitor (comma-separated, only used if FILTER_BY_PRODUCT=True)
-PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,Cloud Networking,Cloud Security,Cloud Logging,Cloud DNS,Vertex AI,Cloud Identity,Cloud Billing,Cloud Pub/Sub,Cloud Memorystore,BigQuery,Cloud Dataproc
+PRODUCTS=Google Compute Engine,Google Kubernetes Engine,Cloud Storage,Cloud SQL,Cloud Networking,Cloud Security,Cloud Logging,Cloud DNS,Vertex AI,Cloud Identity,Cloud Billing,Cloud Pub/Sub,Cloud Memorystore,BigQuery,Cloud Dataproc,Cloud Load Balancing,Cloud Functions,Cloud Run,Cloud CDN,Cloud Armor,Cloud NAT,Cloud VPN,Cloud Interconnect,Cloud Router,Firestore,Cloud Spanner,Cloud Bigtable,Cloud Dataflow,Cloud Composer,Cloud Tasks,Cloud Scheduler
 
 # Logging
 LOG_LEVEL=INFO
@@ -243,11 +251,43 @@ for region in regions:
 ### Query Active Events
 
 ```python
+# Get all active events
 events = db.collection('health_events').stream()
 
 for event in events:
     data = event.to_dict()
     print(f"{data['title']} - {data['affected_regions']}")
+
+# Get only non-ignored events (for dashboards/alerts)
+events = db.collection('health_events').where('ignore', '==', False).stream()
+
+for event in events:
+    data = event.to_dict()
+    print(f"{data['title']} - {data['affected_regions']}")
+    if data.get('comment'):
+        print(f"  Note: {data['comment']}")
+```
+
+### Portal Management Examples
+
+```python
+# Mark an event as ignored (from internal portal)
+event_ref = db.collection('health_events').document('event_id_123')
+event_ref.update({
+    'ignore': True,
+    'comment': 'Known issue - maintenance window, ignore alerts'
+})
+
+# Add a comment without ignoring
+event_ref.update({
+    'comment': 'Investigating with vendor, ETA 2 hours'
+})
+
+# Clear ignore flag
+event_ref.update({
+    'ignore': False,
+    'comment': 'Issue resolved, monitoring'
+})
 ```
 
 ## Logging
@@ -286,7 +326,7 @@ Example output:
 - Verify events affect monitored regions
 - Check product filter - ensure the affected services are in your PRODUCTS list
 - Verify events affect monitored products/services
-- Check event state (only ACTIVE events are collected)
+- Check event state (only ACTIVE events are collected, CLOSED and RESOLVED are excluded)
 
 ## Cost
 

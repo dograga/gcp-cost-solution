@@ -122,7 +122,7 @@ health-monitor/
 ┌─────────────────────────────────────────────────────────────┐
 │  1. Fetch Events from Service Health API                    │
 │     - Query organization events                              │
-│     - Filter by ACTIVE and CLOSED states                     │
+│     - Filter by ACTIVE state (exclude CLOSED and RESOLVED)   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
