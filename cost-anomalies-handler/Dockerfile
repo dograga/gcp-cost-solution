@@ -1,4 +1,4 @@
-# Use official Python runtime as base image
+# Use Python 3.11 slim image
 FROM python:3.11-slim
 
 # Set working directory
@@ -14,11 +14,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY config.py .
 
-# Copy environment configuration files
+# Copy environment files
 COPY .env.* ./
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
+# Expose port
+EXPOSE 8080
+
+# Set environment variable for port
+ENV PORT=8080
 
 # Run the application
 CMD ["python", "main.py"]
