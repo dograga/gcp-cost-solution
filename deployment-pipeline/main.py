@@ -67,22 +67,50 @@ class BitbucketClient:
         url = f"{self.base_url}/{repo_path}/raw/{branch}/{file_path}"
         
         try:
-            logger.debug(f"Fetching: {url}")
+            logger.info(f"[AUDIT] Fetching file from Bitbucket")
+            logger.info(f"[AUDIT]   URL: {url}")
+            logger.info(f"[AUDIT]   Repository: {repo_path}")
+            logger.info(f"[AUDIT]   File: {file_path}")
+            logger.info(f"[AUDIT]   Branch: {branch}")
+            
             response = self.session.get(url, timeout=10)
+            
+            logger.info(f"[AUDIT] Response: HTTP {response.status_code}")
             
             if response.status_code == 200:
                 content = response.text
-                logger.debug(f"Successfully fetched {file_path} from {repo_path}")
+                content_length = len(content)
+                logger.info(f"[AUDIT] Successfully fetched file ({content_length} bytes)")
+                logger.debug(f"File content preview: {content[:100]}...")
                 return content
             elif response.status_code == 404:
-                logger.warning(f"File not found: {repo_path}/{file_path} on branch {branch}")
+                logger.error(f"[AUDIT] File not found: {repo_path}/{file_path} on branch {branch}")
+                logger.error(f"[AUDIT] URL attempted: {url}")
+                return None
+            elif response.status_code == 401:
+                logger.error(f"[AUDIT] Authentication failed (HTTP 401)")
+                logger.error(f"[AUDIT] Check BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD")
+                return None
+            elif response.status_code == 403:
+                logger.error(f"[AUDIT] Access forbidden (HTTP 403)")
+                logger.error(f"[AUDIT] Check repository permissions for user")
                 return None
             else:
-                logger.error(f"Error fetching file: HTTP {response.status_code}")
+                logger.error(f"[AUDIT] Unexpected error: HTTP {response.status_code}")
+                logger.error(f"[AUDIT] Response body: {response.text[:200]}")
                 return None
                 
+        except requests.exceptions.Timeout:
+            logger.error(f"[AUDIT] Request timeout after 10s")
+            logger.error(f"[AUDIT] URL: {url}")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"[AUDIT] Connection error: {e}")
+            logger.error(f"[AUDIT] URL: {url}")
+            return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed for {repo_path}/{file_path}: {e}")
+            logger.error(f"[AUDIT] Request failed: {e}")
+            logger.error(f"[AUDIT] URL: {url}")
             return None
     
     def parse_version_from_file(self, file_content: str, variable_name: str) -> Optional[str]:
