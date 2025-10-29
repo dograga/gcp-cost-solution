@@ -162,6 +162,131 @@ history:
         changed: true
 ```
 
+## Audit Logging
+
+The pipeline provides comprehensive audit logging with `[AUDIT]` prefix for easy filtering.
+
+### Log Output Example
+
+```
+[AUDIT] Starting scan of 20 microservices
+================================================================================
+
+[AUDIT] [1/20] Processing service: auth-service
+[AUDIT]   Repository: auth-api
+[AUDIT]   Version file: version.env
+[AUDIT]   Version variable: APP_VERSION
+[AUDIT] Fetching file from Bitbucket
+[AUDIT]   URL: https://bitbucket.org/your-org/auth-api/raw/uat/version.env
+[AUDIT]   Repository: auth-api
+[AUDIT]   File: version.env
+[AUDIT]   Branch: uat
+[AUDIT] Response: HTTP 200
+[AUDIT] Successfully fetched file (45 bytes)
+[AUDIT] ✓ Successfully fetched version: v1.2.5
+
+[AUDIT] [2/20] Processing service: user-service
+[AUDIT]   Repository: user-api
+[AUDIT]   Version file: version.env
+[AUDIT]   Version variable: APP_VERSION
+[AUDIT] Fetching file from Bitbucket
+[AUDIT]   URL: https://bitbucket.org/your-org/user-api/raw/uat/version.env
+[AUDIT]   Repository: user-api
+[AUDIT]   File: version.env
+[AUDIT]   Branch: uat
+[AUDIT] Response: HTTP 404
+[AUDIT] File not found: user-api/version.env on branch uat
+[AUDIT] URL attempted: https://bitbucket.org/your-org/user-api/raw/uat/version.env
+[AUDIT] ❌ FAILED to fetch version for user-service
+
+================================================================================
+[AUDIT] Scan Summary:
+[AUDIT]   Total services: 20
+[AUDIT]   Successful: 19
+[AUDIT]   Failed: 1
+================================================================================
+
+[AUDIT] Failed Services Details:
+[AUDIT]   - user-service
+[AUDIT]     Repository: user-api
+[AUDIT]     Version file: version.env
+[AUDIT]     Error: Could not fetch version file
+
+================================================================================
+[AUDIT] ❌ PIPELINE FAILED
+[AUDIT] One or more services failed to fetch versions
+[AUDIT] services.yaml will NOT be generated
+[AUDIT] Please check the errors above and fix configuration
+================================================================================
+```
+
+### HTTP Status Codes Logged
+
+- **200 OK** - File fetched successfully
+- **401 Unauthorized** - Authentication failed (check credentials)
+- **403 Forbidden** - Access denied (check repository permissions)
+- **404 Not Found** - File or repository not found
+- **Timeout** - Request timeout after 10 seconds
+- **Connection Error** - Network connectivity issues
+
+### Filtering Audit Logs
+
+```bash
+# View only audit logs
+python main.py | grep "\[AUDIT\]"
+
+# View only errors
+python main.py | grep "ERROR"
+
+# View only failed services
+python main.py | grep "❌"
+```
+
+## Failure Handling
+
+### Behavior on Failure
+
+If **any** service fails to fetch its version:
+
+1. ❌ Pipeline exits with error code 1
+2. ❌ `services.yaml` is **NOT** generated
+3. ✅ Detailed error logs are provided
+4. ✅ Failed services list is displayed
+
+This prevents deploying with incomplete or stale version data.
+
+### Success Criteria
+
+Pipeline only succeeds if:
+- ✅ All services fetch successfully
+- ✅ All version files are found
+- ✅ All version variables are parsed
+- ✅ `services.yaml` is generated
+
+### Example: Successful Run
+
+```
+================================================================================
+[AUDIT] All services scanned successfully
+================================================================================
+[AUDIT] Total Services: 20
+[AUDIT] Changed: 3
+[AUDIT] Unchanged: 17
+================================================================================
+
+[AUDIT] Changed Services:
+[AUDIT]   - auth-service: v1.2.5
+[AUDIT]   - payment-service: v3.0.2
+[AUDIT]   - notification-service: v2.1.0
+
+[AUDIT] Generating output file: services.yaml
+[AUDIT] ✓ Successfully generated services.yaml
+
+================================================================================
+[AUDIT] ✓ Pipeline Completed Successfully
+================================================================================
+```
+
 ## How It Works
 
 ### 1. Load Current Versions
@@ -176,11 +301,23 @@ If `services.yaml` exists, loads current versions:
 
 ### 2. Fetch New Versions
 
-For each service, fetches version file from Bitbucket:
+For each service, fetches version file from Bitbucket using the raw file API:
 ```
-GET https://bitbucket.org/your-org/auth-api/raw/uat/version.txt
+GET https://bitbucket.org/your-org/auth-api/raw/version.txt?at=refs%2Fheads%2Fuat
 → v1.2.5
 ```
+
+**URL Format:**
+```
+{base_url}/{repo_path}/raw/{file_path}?at=refs%2Fheads%2F{branch}
+```
+
+Example:
+- Base URL: `https://bitbucket.org/your-org`
+- Repo: `auth-api`
+- File: `version.env`
+- Branch: `uat`
+- Full URL: `https://bitbucket.org/your-org/auth-api/raw/version.env?at=refs%2Fheads%2Fuat`
 
 ### 3. Compare Versions
 

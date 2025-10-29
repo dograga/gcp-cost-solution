@@ -7,6 +7,7 @@ Scans Bitbucket repositories for microservice versions and generates deployment 
 import logging
 import os
 import sys
+import urllib.parse
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -63,15 +64,19 @@ class BitbucketClient:
         Returns:
             File content as string, or None if not found
         """
-        # Bitbucket API URL format: /repos/{workspace}/{repo_slug}/src/{branch}/{path}
-        url = f"{self.base_url}/{repo_path}/raw/{branch}/{file_path}"
+        # Bitbucket URL format: base-url/raw/<file-name>?at=refs%2Fheads%2F<branch>
+        # URL encode the branch reference
+        branch_ref = f"refs/heads/{branch}"
+        encoded_branch = urllib.parse.quote(branch_ref, safe='')
+        
+        url = f"{self.base_url}/{repo_path}/raw/{file_path}?at={encoded_branch}"
         
         try:
             logger.info(f"[AUDIT] Fetching file from Bitbucket")
             logger.info(f"[AUDIT]   URL: {url}")
             logger.info(f"[AUDIT]   Repository: {repo_path}")
             logger.info(f"[AUDIT]   File: {file_path}")
-            logger.info(f"[AUDIT]   Branch: {branch}")
+            logger.info(f"[AUDIT]   Branch: {branch} (ref: {branch_ref})")
             
             response = self.session.get(url, timeout=10)
             
