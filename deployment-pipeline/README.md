@@ -13,12 +13,14 @@ This tool:
 
 ## Features
 
-- **Multi-Service Support**: Scan 10+ microservices in one run
-- **Change Detection**: Automatically detects version changes
-- **History Tracking**: Maintains version history (last 50 deployments)
-- **Flexible Configuration**: Define services via environment variables
-- **Bitbucket Integration**: Fetches files directly from Bitbucket API
-- **YAML Output**: Generates deployment-ready YAML manifest
+- **Multi-Repo Support**: Scans multiple microservices from different Bitbucket repositories
+- **Version Tracking**: Tracks version changes across pipeline runs
+- **History Management**: Maintains last 50 runs in history file
+- **YAML Output**: Generates deployment manifest in YAML format
+- **Environment Support**: Separate configurations for dev/uat/prd
+- **Flexible Version Files**: Supports ENV files and plain text version files
+- **Detailed Audit Logging**: Comprehensive logging of all API calls, URLs, and response codes
+- **Failure Prevention**: Prevents YAML generation if any service fails to fetch
 
 ## Configuration
 

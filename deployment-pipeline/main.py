@@ -346,27 +346,46 @@ class DeploymentPipeline:
         
         return version
     
-    def scan_all_services(self) -> List[Dict[str, any]]:
+    def scan_all_services(self) -> tuple[List[Dict[str, any]], bool]:
         """
         Scan all configured microservices for versions.
         
         Returns:
-            List of service dictionaries with version and changed status
+            Tuple of (services list, success flag)
+            - services: List of service dictionaries with version and changed status
+            - success: True if all services fetched successfully, False otherwise
         """
-        logger.info(f"Scanning {len(config.MICROSERVICES)} microservices...")
+        logger.info("=" * 80)
+        logger.info(f"[AUDIT] Starting scan of {len(config.MICROSERVICES)} microservices")
+        logger.info("=" * 80)
         
         services = []
+        failed_services = []
+        success_count = 0
         
-        for service_config in config.MICROSERVICES:
+        for idx, service_config in enumerate(config.MICROSERVICES, 1):
             service_name = service_config['name']
-            logger.info(f"Processing: {service_name}")
+            logger.info("")
+            logger.info(f"[AUDIT] [{idx}/{len(config.MICROSERVICES)}] Processing service: {service_name}")
+            logger.info(f"[AUDIT]   Repository: {service_config['repo_path']}")
+            logger.info(f"[AUDIT]   Version file: {service_config['version_file']}")
+            logger.info(f"[AUDIT]   Version variable: {service_config['version_variable']}")
             
             # Fetch version from Bitbucket
             version = self.fetch_service_version(service_config)
             
             if version is None:
-                logger.warning(f"Could not fetch version for {service_name}, using 'unknown'")
+                logger.error(f"[AUDIT] ❌ FAILED to fetch version for {service_name}")
+                failed_services.append({
+                    'name': service_name,
+                    'repo_path': service_config['repo_path'],
+                    'version_file': service_config['version_file'],
+                    'error': 'Could not fetch version file'
+                })
                 version = 'unknown'
+            else:
+                logger.info(f"[AUDIT] ✓ Successfully fetched version: {version}")
+                success_count += 1
             
             # Check if version changed
             changed = self.version_manager.check_version_changed(service_name, version)
@@ -383,7 +402,29 @@ class DeploymentPipeline:
             
             services.append(service_entry)
         
-        return services
+        # Print summary
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"[AUDIT] Scan Summary:")
+        logger.info(f"[AUDIT]   Total services: {len(config.MICROSERVICES)}")
+        logger.info(f"[AUDIT]   Successful: {success_count}")
+        logger.info(f"[AUDIT]   Failed: {len(failed_services)}")
+        logger.info("=" * 80)
+        
+        # Log failed services
+        if failed_services:
+            logger.error("")
+            logger.error("[AUDIT] Failed Services Details:")
+            for failed in failed_services:
+                logger.error(f"[AUDIT]   - {failed['name']}")
+                logger.error(f"[AUDIT]     Repository: {failed['repo_path']}")
+                logger.error(f"[AUDIT]     Version file: {failed['version_file']}")
+                logger.error(f"[AUDIT]     Error: {failed['error']}")
+        
+        # Determine if scan was successful
+        all_success = len(failed_services) == 0
+        
+        return services, all_success
     
     def run(self):
         """Main execution method."""
@@ -397,38 +438,61 @@ class DeploymentPipeline:
         
         try:
             # Scan all services
-            services = self.scan_all_services()
+            services, all_success = self.scan_all_services()
+            
+            # Check if scan was successful
+            if not all_success:
+                logger.error("")
+                logger.error("=" * 80)
+                logger.error("[AUDIT] ❌ PIPELINE FAILED")
+                logger.error("[AUDIT] One or more services failed to fetch versions")
+                logger.error("[AUDIT] services.yaml will NOT be generated")
+                logger.error("[AUDIT] Please check the errors above and fix configuration")
+                logger.error("=" * 80)
+                return 1  # Exit with error code
             
             # Generate statistics
             total_services = len(services)
             changed_services = sum(1 for s in services if s['changed'])
             unchanged_services = total_services - changed_services
             
-            logger.info("=" * 60)
-            logger.info("Scan Complete")
-            logger.info(f"Total Services: {total_services}")
-            logger.info(f"Changed: {changed_services}")
-            logger.info(f"Unchanged: {unchanged_services}")
-            logger.info("=" * 60)
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("[AUDIT] All services scanned successfully")
+            logger.info("=" * 80)
+            logger.info(f"[AUDIT] Total Services: {total_services}")
+            logger.info(f"[AUDIT] Changed: {changed_services}")
+            logger.info(f"[AUDIT] Unchanged: {unchanged_services}")
+            logger.info("=" * 80)
             
             # List changed services
             if changed_services > 0:
-                logger.info("Changed Services:")
+                logger.info("")
+                logger.info("[AUDIT] Changed Services:")
                 for service in services:
                     if service['changed']:
-                        logger.info(f"  - {service['name']}: {service['version']}")
+                        logger.info(f"[AUDIT]   - {service['name']}: {service['version']}")
             
             # Save to YAML
+            logger.info("")
+            logger.info(f"[AUDIT] Generating output file: {config.OUTPUT_FILE}")
             self.version_manager.save_services_yaml(services)
+            logger.info(f"[AUDIT] ✓ Successfully generated {config.OUTPUT_FILE}")
             
-            logger.info("=" * 60)
-            logger.info("Pipeline Completed Successfully")
-            logger.info("=" * 60)
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("[AUDIT] ✓ Pipeline Completed Successfully")
+            logger.info("=" * 80)
             
-            return 0
+            return 0  # Exit with success code
             
         except Exception as e:
-            logger.error(f"Pipeline failed: {e}", exc_info=True)
+            logger.error("")
+            logger.error("=" * 80)
+            logger.error(f"[AUDIT] ❌ PIPELINE EXCEPTION")
+            logger.error(f"[AUDIT] Unexpected error: {e}")
+            logger.error("=" * 80)
+            logger.error("Exception details:", exc_info=True)
             return 1
 
 
