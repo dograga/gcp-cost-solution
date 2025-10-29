@@ -1,0 +1,109 @@
+# Microservices Configuration
+# Define all microservices to be scanned for version updates
+
+services:
+  # Authentication & Authorization
+  - name: auth-service
+    repo_path: auth-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: user-service
+    repo_path: user-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  # Payment Services
+  - name: payment-service
+    repo_path: payment-api
+    version_file: .env
+    version_variable: VERSION
+    
+  - name: billing-service
+    repo_path: billing-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  # Notification Services
+  - name: notification-service
+    repo_path: notification-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: email-service
+    repo_path: email-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: sms-service
+    repo_path: sms-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  # Analytics & Reporting
+  - name: analytics-service
+    repo_path: analytics-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: reporting-service
+    repo_path: reporting-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: dashboard-service
+    repo_path: dashboard-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  # Infrastructure Services
+  - name: gateway-service
+    repo_path: api-gateway
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: config-service
+    repo_path: config-server
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: discovery-service
+    repo_path: service-discovery
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: logging-service
+    repo_path: logging-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: monitoring-service
+    repo_path: monitoring-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  # Business Services
+  - name: order-service
+    repo_path: order-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: inventory-service
+    repo_path: inventory-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: shipping-service
+    repo_path: shipping-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: customer-service
+    repo_path: customer-api
+    version_file: version.env
+    version_variable: APP_VERSION
+    
+  - name: product-service
+    repo_path: product-api
+    version_file: version.env
+    version_variable: APP_VERSION
