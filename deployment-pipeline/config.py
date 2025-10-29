@@ -25,8 +25,10 @@ BITBUCKET_BASE_URL = os.environ.get('BITBUCKET_BASE_URL')
 if not BITBUCKET_BASE_URL:
     raise ValueError(f"BITBUCKET_BASE_URL must be set in .env.{ENVIRONMENT} or environment variables")
 
-BITBUCKET_USERNAME = os.environ.get('BITBUCKET_USERNAME')
-BITBUCKET_APP_PASSWORD = os.environ.get('BITBUCKET_APP_PASSWORD')
+BITBUCKET_ACCESS_TOKEN = os.environ.get('BITBUCKET_ACCESS_TOKEN')
+if not BITBUCKET_ACCESS_TOKEN:
+    raise ValueError(f"BITBUCKET_ACCESS_TOKEN must be set in .env.{ENVIRONMENT} or environment variables")
+
 SOURCE_BRANCH = os.environ.get('SOURCE_BRANCH', 'uat')
 
 # Services Configuration

@@ -29,8 +29,8 @@ This tool:
 ```bash
 # Bitbucket Configuration
 BITBUCKET_BASE_URL=https://bitbucket.org/your-org
-BITBUCKET_USERNAME=your-username
-BITBUCKET_APP_PASSWORD=your-app-password
+# HTTP Access Token (Repository Read permission required)
+BITBUCKET_ACCESS_TOKEN=your-access-token-here
 SOURCE_BRANCH=uat
 
 # Services Configuration
@@ -44,6 +44,36 @@ HISTORY_FILE=services_history.yaml
 
 # Logging
 LOG_LEVEL=INFO
+```
+
+### Generating Bitbucket Access Token
+
+1. **Navigate to Bitbucket Settings**
+   - Go to https://bitbucket.org/account/settings/app-passwords/
+   - Or: Click your profile → Personal settings → App passwords
+
+2. **Create App Password**
+   - Click "Create app password"
+   - Label: `deployment-pipeline` (or any descriptive name)
+
+3. **Set Permissions**
+   - ✅ **Repositories: Read** (required)
+   - All other permissions can be unchecked
+
+4. **Copy Token**
+   - Copy the generated token immediately
+   - Store it securely (you won't be able to see it again)
+   - Add to `.env.dev` as `BITBUCKET_ACCESS_TOKEN`
+
+5. **Security Best Practices**
+   - Never commit the token to version control
+   - Use different tokens for dev/uat/prd environments
+   - Rotate tokens periodically
+   - Revoke tokens that are no longer needed
+
+**Example:**
+```bash
+BITBUCKET_ACCESS_TOKEN=ATBBxxx...xxxYYY
 ```
 
 ### Services Configuration File (services_config.yaml)

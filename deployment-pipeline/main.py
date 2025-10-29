@@ -13,7 +13,6 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 import requests
-from requests.auth import HTTPBasicAuth
 import yaml
 
 # Import configuration
@@ -30,22 +29,27 @@ logger = logging.getLogger(__name__)
 class BitbucketClient:
     """Client for interacting with Bitbucket API."""
     
-    def __init__(self, base_url: str, username: str, app_password: str):
+    def __init__(self, base_url: str, access_token: str):
         """
-        Initialize Bitbucket client.
+        Initialize Bitbucket client with HTTP access token.
         
         Args:
             base_url: Bitbucket base URL (e.g., https://bitbucket.org/your-org)
-            username: Bitbucket username
-            app_password: Bitbucket app password
+            access_token: Bitbucket HTTP access token (Bearer token)
         """
         self.base_url = base_url.rstrip('/')
-        self.auth = HTTPBasicAuth(username, app_password) if username and app_password else None
         self.session = requests.Session()
-        if self.auth:
-            self.session.auth = self.auth
         
-        logger.info(f"Initialized Bitbucket client for: {self.base_url}")
+        # Set Authorization header with Bearer token
+        if access_token:
+            self.session.headers.update({
+                'Authorization': f'Bearer {access_token}'
+            })
+            logger.info(f"[AUDIT] Initialized Bitbucket client with access token authentication")
+        else:
+            logger.warning(f"[AUDIT] No access token provided - requests may fail")
+        
+        logger.info(f"[AUDIT] Bitbucket base URL: {self.base_url}")
     
     def fetch_file_content(
         self, 
@@ -311,8 +315,7 @@ class DeploymentPipeline:
         """Initialize deployment pipeline."""
         self.bitbucket = BitbucketClient(
             base_url=config.BITBUCKET_BASE_URL,
-            username=config.BITBUCKET_USERNAME,
-            app_password=config.BITBUCKET_APP_PASSWORD
+            access_token=config.BITBUCKET_ACCESS_TOKEN
         )
         
         self.version_manager = VersionManager(
