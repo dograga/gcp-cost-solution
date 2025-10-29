@@ -70,6 +70,45 @@ Post a simple text message (query parameters).
 curl -X POST "http://localhost:8080/post-simple-message?webhook_url=https://outlook.office.com/webhook/...&message=Hello%20Teams"
 ```
 
+### POST /pubsub-notification
+
+Pub/Sub push subscription endpoint for event-driven notifications.
+
+**Pub/Sub Message Format:**
+```json
+{
+  "message": {
+    "data": "base64-encoded-payload",
+    "messageId": "123456",
+    "publishTime": "2025-10-29T12:00:00Z"
+  },
+  "subscription": "projects/my-project/subscriptions/teams-notifications"
+}
+```
+
+**Decoded Payload (base64):**
+```json
+{
+  "webhook_url": "https://outlook.office.com/webhook/...",
+  "message": "Cost alert: Budget exceeded",
+  "title": "⚠️ Cost Alert",
+  "color": "FF0000",
+  "facts": {
+    "Project": "my-project",
+    "Cost": "$1,250",
+    "Budget": "$1,000"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "status": "processed",
+  "success": true
+}
+```
+
 ### GET /health
 
 Health check endpoint.
@@ -81,6 +120,73 @@ Health check endpoint.
   "timestamp": "2025-10-29T15:55:00Z",
   "version": "1.0.0"
 }
+```
+
+## Pub/Sub Integration
+
+### Setup Pub/Sub Push Subscription
+
+1. **Create Pub/Sub Topic**
+```bash
+gcloud pubsub topics create teams-notifications
+```
+
+2. **Deploy Notification API to Cloud Run**
+```bash
+gcloud run deploy notification-api \
+  --source . \
+  --region asia-southeast1 \
+  --allow-unauthenticated
+```
+
+3. **Create Push Subscription**
+```bash
+gcloud pubsub subscriptions create teams-notifications-sub \
+  --topic=teams-notifications \
+  --push-endpoint=https://notification-api-xxx.run.app/pubsub-notification \
+  --ack-deadline=60
+```
+
+4. **Publish Test Message**
+```bash
+# Encode payload as base64
+echo -n '{"webhook_url":"https://outlook.office.com/webhook/...","message":"Test from Pub/Sub","title":"Test Alert","color":"0078D4"}' | base64
+
+# Publish to topic
+gcloud pubsub topics publish teams-notifications \
+  --message='<base64-encoded-payload>'
+```
+
+### Python Example - Publish to Pub/Sub
+
+```python
+from google.cloud import pubsub_v1
+import json
+import base64
+
+publisher = pubsub_v1.PublisherClient()
+topic_path = publisher.topic_path('my-project', 'teams-notifications')
+
+# Create notification payload
+payload = {
+    "webhook_url": "https://outlook.office.com/webhook/...",
+    "message": "Cost alert: Budget exceeded by 25%",
+    "title": "⚠️ Cost Alert",
+    "color": "FF0000",
+    "facts": {
+        "Project": "my-gcp-project",
+        "Current Cost": "$1,250",
+        "Budget": "$1,000",
+        "Overage": "25%"
+    }
+}
+
+# Encode as base64
+data = json.dumps(payload).encode('utf-8')
+
+# Publish
+future = publisher.publish(topic_path, data)
+print(f"Published message ID: {future.result()}")
 ```
 
 ## Setup Microsoft Teams Webhook
@@ -287,18 +393,60 @@ The API uses **Adaptive Cards v1.4** format for rich, modern Teams messages.
 
 ## Message Colors
 
-The API maps hex color codes to Adaptive Card styles:
+The API uses predefined Teams color schemes with automatic validation.
 
-| Hex Color | Style | Use Case |
-|-----------|-------|----------|
-| `0078D4` | `accent` | Info (Microsoft Blue) |
-| `00FF00`, `28A745` | `good` | Success (Green) |
-| `FFA500`, `FFC107` | `warning` | Warning (Orange/Yellow) |
-| `FF0000`, `DC3545` | `attention` | Error (Red) |
-| `8B0000` | `attention` | Critical (Dark Red) |
+### Predefined Colors (TeamsColor Enum)
+
+| Color Name | Hex Code | Style | Use Case |
+|------------|----------|-------|----------|
+| `INFO` (default) | `0078D4` | `accent` | Informational messages |
+| `SUCCESS` | `28A745` | `good` | Success notifications |
+| `WARNING` | `FFC107` | `warning` | Warning alerts |
+| `ERROR` | `DC3545` | `attention` | Error messages |
+| `CRITICAL` | `8B0000` | `attention` | Critical alerts |
+
+### Usage
+
+**Option 1: Use predefined colors (recommended)**
+```python
+from dataclass import TeamsColor
+
+payload = {
+    "webhook_url": "https://outlook.office.com/webhook/...",
+    "message": "Budget exceeded",
+    "title": "Cost Alert",
+    "color": TeamsColor.ERROR,  # or "DC3545"
+    "facts": {"Project": "XYZ"}
+}
+```
+
+**Option 2: Use custom hex codes**
+```python
+payload = {
+    "webhook_url": "https://outlook.office.com/webhook/...",
+    "message": "Custom alert",
+    "color": "FF5733"  # Custom orange
+}
+```
+
+**Option 3: Omit color (uses default INFO blue)**
+```python
+payload = {
+    "webhook_url": "https://outlook.office.com/webhook/...",
+    "message": "Default blue message"
+    # color is optional, defaults to INFO (0078D4)
+}
+```
+
+### Color Validation
+
+- Automatically removes `#` prefix if present
+- Validates 6-character hex format
+- Converts to uppercase
+- Defaults to INFO blue if not specified
 
 **Adaptive Card Styles:**
-- **accent**: Blue background (default)
+- **accent**: Blue background (info)
 - **good**: Green background (success)
 - **warning**: Yellow background (warning)
 - **attention**: Red background (error/critical)
@@ -308,18 +456,28 @@ The API maps hex color codes to Adaptive Card styles:
 ### Cost Alert Integration
 
 ```python
-# From cost-anomalies-handler
+from dataclass import TeamsColor
 import requests
+import os
+from datetime import datetime
 
 def send_cost_alert(project_id: str, current_cost: float, budget: float):
-    """Send cost alert to Teams."""
+    """Send cost alert to Teams with color based on severity"""
     overage_pct = ((current_cost - budget) / budget) * 100
+    
+    # Choose color based on severity
+    if overage_pct > 50:
+        color = TeamsColor.CRITICAL
+    elif overage_pct > 25:
+        color = TeamsColor.ERROR
+    else:
+        color = TeamsColor.WARNING
     
     payload = {
         "webhook_url": os.getenv("TEAMS_WEBHOOK_URL"),
         "message": f"Project {project_id} has exceeded its budget by {overage_pct:.1f}%",
         "title": "⚠️ Cost Budget Alert",
-        "color": "FF0000" if overage_pct > 50 else "FFA500",
+        "color": color,
         "facts": {
             "Project": project_id,
             "Current Cost": f"${current_cost:,.2f}",
@@ -339,9 +497,11 @@ def send_cost_alert(project_id: str, current_cost: float, budget: float):
 ### Deployment Notification
 
 ```python
+from dataclass import TeamsColor
+
 def send_deployment_notification(service: str, version: str, status: str):
-    """Send deployment notification to Teams."""
-    color = "00FF00" if status == "success" else "FF0000"
+    """Send deployment notification to Teams"""
+    color = TeamsColor.SUCCESS if status == "success" else TeamsColor.ERROR
     
     payload = {
         "webhook_url": os.getenv("TEAMS_WEBHOOK_URL"),

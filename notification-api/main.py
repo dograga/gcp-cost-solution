@@ -1,87 +1,44 @@
-"""
-FastAPI Notification API
-Sends messages to Microsoft Teams channels via webhooks.
-"""
+"""FastAPI Notification API - Teams webhooks and Pub/Sub integration"""
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl, Field
+from pydantic import HttpUrl
 import httpx
 import logging
 import asyncio
-from typing import Optional, Dict, Any
+import base64
+import json
+from typing import Dict, Any
 from datetime import datetime
 
-# Configure logging
+from dataclass import (
+    TeamsMessageRequest,
+    TeamsMessageResponse,
+    PubSubMessage,
+    PubSubNotification,
+    HealthResponse,
+    TeamsColor
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
 app = FastAPI(
     title="Notification API",
     description="API for sending notifications to Microsoft Teams channels",
     version="1.0.0"
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Request/Response Models
-class TeamsMessageRequest(BaseModel):
-    """Request model for posting to Teams channel."""
-    webhook_url: HttpUrl = Field(
-        ...,
-        description="Microsoft Teams webhook URL",
-        example="https://outlook.office.com/webhook/..."
-    )
-    message: str = Field(
-        ...,
-        min_length=1,
-        max_length=10000,
-        description="Message to post to Teams channel",
-        example="Cost alert: Project XYZ exceeded budget by 20%"
-    )
-    title: Optional[str] = Field(
-        None,
-        max_length=256,
-        description="Optional message title",
-        example="Cost Alert"
-    )
-    color: Optional[str] = Field(
-        "0078D4",
-        description="Hex color code for message theme (without #)",
-        example="FF0000"
-    )
-    facts: Optional[Dict[str, str]] = Field(
-        None,
-        description="Optional key-value pairs to display as facts",
-        example={"Project": "XYZ", "Cost": "$1,250", "Budget": "$1,000"}
-    )
-
-
-class TeamsMessageResponse(BaseModel):
-    """Response model for Teams message posting."""
-    success: bool
-    message: str
-    timestamp: str
-    webhook_url: str
-
-
-class HealthResponse(BaseModel):
-    """Health check response."""
-    status: str
-    timestamp: str
-    version: str
 
 
 # API Endpoints
@@ -110,21 +67,8 @@ async def post_to_teams_with_retry(
     message_card: Dict[str, Any],
     max_retries: int = 3
 ) -> httpx.Response:
-    """
-    Post message to Teams webhook with retry logic for transient errors.
-    
-    Args:
-        webhook_url: Teams webhook URL
-        message_card: Formatted message card
-        max_retries: Maximum number of retry attempts
-        
-    Returns:
-        httpx.Response object
-        
-    Raises:
-        httpx.HTTPStatusError: If all retries fail
-    """
-    retryable_status_codes = {502, 503, 504, 429}  # Bad Gateway, Service Unavailable, Gateway Timeout, Too Many Requests
+    """Post to Teams with retry on transient errors (502, 503, 504, 429)"""
+    retryable_status_codes = {502, 503, 504, 429}
     
     async with httpx.AsyncClient(timeout=30.0) as client:
         for attempt in range(max_retries):
@@ -135,51 +79,33 @@ async def post_to_teams_with_retry(
                     headers={"Content-Type": "application/json"}
                 )
                 
-                # Success
                 if response.status_code == 200:
                     if attempt > 0:
-                        logger.info(f"Successfully posted to Teams after {attempt + 1} attempts")
+                        logger.info(f"Posted to Teams after {attempt + 1} attempts")
                     return response
                 
-                # Retryable error
                 if response.status_code in retryable_status_codes and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)  # Exponential backoff with jitter
-                    logger.warning(
-                        f"Teams webhook returned {response.status_code}, "
-                        f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
-                    )
+                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
+                    logger.warning(f"Retry {attempt + 1}/{max_retries} after {response.status_code}")
                     await asyncio.sleep(wait_time)
                     continue
                 
-                # Non-retryable error or final attempt
-                logger.error(f"Teams webhook returned status {response.status_code}: {response.text}")
+                logger.error(f"Teams webhook failed: {response.status_code}")
                 return response
                 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
-                # Network errors - retry
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
-                    logger.warning(
-                        f"Network error ({type(e).__name__}), "
-                        f"retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})"
-                    )
+                    logger.warning(f"Network error, retry {attempt + 1}/{max_retries}")
                     await asyncio.sleep(wait_time)
                     continue
-                else:
-                    # Final attempt - raise
-                    raise
+                raise
             
             except httpx.RequestError as e:
-                # Other request errors - don't retry
-                logger.error(f"Request error (non-retryable): {e}")
+                logger.error(f"Request error: {e}")
                 raise
     
-    # Should not reach here
-    raise httpx.HTTPStatusError(
-        "Max retries exceeded",
-        request=None,
-        response=None
-    )
+    raise httpx.HTTPStatusError("Max retries exceeded", request=None, response=None)
 
 
 @app.post("/post-team-channel", response_model=TeamsMessageResponse, status_code=status.HTTP_200_OK)
@@ -334,29 +260,73 @@ def build_teams_message_card(
     return message_payload
 
 
-# Alternative endpoint with simple text message
 @app.post("/post-simple-message", response_model=TeamsMessageResponse)
-async def post_simple_message(
-    webhook_url: HttpUrl,
-    message: str
-):
-    """
-    Post a simple text message to Teams channel.
-    
-    Simplified endpoint that only requires webhook URL and message text.
-    
-    Args:
-        webhook_url: Microsoft Teams webhook URL
-        message: Message text to post
-        
-    Returns:
-        TeamsMessageResponse with success status
-    """
-    request = TeamsMessageRequest(
-        webhook_url=webhook_url,
-        message=message
-    )
+async def post_simple_message(webhook_url: HttpUrl, message: str):
+    """Post simple text message to Teams"""
+    request = TeamsMessageRequest(webhook_url=webhook_url, message=message)
     return await post_to_teams_channel(request)
+
+
+@app.post("/pubsub-notification")
+async def pubsub_notification(request: Request):
+    """
+    Pub/Sub push subscription endpoint for Teams notifications.
+    
+    Expects Pub/Sub message with base64-encoded JSON payload:
+    {
+        "webhook_url": "https://outlook.office.com/webhook/...",
+        "message": "Alert message",
+        "title": "Alert Title",
+        "color": "FF0000",
+        "facts": {"key": "value"}
+    }
+    """
+    try:
+        envelope = await request.json()
+        
+        if "message" not in envelope:
+            raise HTTPException(status_code=400, detail="Invalid Pub/Sub message format")
+        
+        pubsub_message = envelope["message"]
+        
+        if "data" not in pubsub_message:
+            raise HTTPException(status_code=400, detail="No data in Pub/Sub message")
+        
+        # Decode base64 payload
+        data = base64.b64decode(pubsub_message["data"]).decode("utf-8")
+        payload = json.loads(data)
+        
+        logger.info(f"Received Pub/Sub notification: {payload.get('title', 'No title')}")
+        
+        # Validate required fields
+        if "webhook_url" not in payload or "message" not in payload:
+            raise HTTPException(
+                status_code=400,
+                detail="Payload must contain webhook_url and message"
+            )
+        
+        # Create Teams message request
+        teams_request = TeamsMessageRequest(
+            webhook_url=payload["webhook_url"],
+            message=payload["message"],
+            title=payload.get("title"),
+            color=payload.get("color", "0078D4"),
+            facts=payload.get("facts")
+        )
+        
+        # Post to Teams
+        response = await post_to_teams_channel(teams_request)
+        
+        # Return 204 No Content for Pub/Sub acknowledgment
+        return {"status": "processed", "success": response.success}
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in Pub/Sub message: {e}")
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    
+    except Exception as e:
+        logger.error(f"Error processing Pub/Sub message: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
