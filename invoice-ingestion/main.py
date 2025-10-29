@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Cloud Run Job to fetch GCP monthly invoices and store them in Firestore.
-Retrieves invoices from Cloud Billing API and enriches line items with project metadata.
+Retrieves invoices from Cloud Billing API for chargeback purposes.
 """
 
 import logging
@@ -18,9 +18,6 @@ from google.api_core import exceptions, retry
 # Import configuration
 import config
 
-# Import BigQuery client
-from bigquery_client import BillingLineItemsClient
-
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -34,30 +31,22 @@ logger.debug(f"Configuration: {config.CONFIG}")
 
 
 class InvoiceCollector:
-    """Collects GCP monthly invoices and enriches them with project metadata."""
+    """Collects GCP monthly invoices for chargeback purposes."""
     
     def __init__(self):
-        """Initialize the Billing, BigQuery, and Firestore clients."""
+        """Initialize the Billing and Firestore clients."""
         self.cloud_billing_client = billing_v1.CloudBillingClient()
-        self.bq_line_items_client = BillingLineItemsClient()
         
-        # Firestore clients for different databases
+        # Firestore client for invoice storage
         self.firestore_client = firestore.Client(
             project=config.GCP_PROJECT_ID,
             database=config.FIRESTORE_DATABASE
-        )
-        
-        self.enrichment_client = firestore.Client(
-            project=config.GCP_PROJECT_ID,
-            database=config.ENRICHMENT_DATABASE
         )
         
         self.billing_account_ids = config.BILLING_ACCOUNT_LIST
         
         logger.info(f"Initialized InvoiceCollector for project: {config.GCP_PROJECT_ID}")
         logger.info(f"Firestore database: {config.FIRESTORE_DATABASE}")
-        logger.info(f"Enrichment database: {config.ENRICHMENT_DATABASE}")
-        logger.info(f"BigQuery dataset: {config.BILLING_DATASET}")
     
     def get_billing_accounts(self) -> List[str]:
         """
@@ -140,11 +129,6 @@ class InvoiceCollector:
                 # Parse invoice data
                 invoice = self._parse_invoice(invoice_proto)
                 
-                # Fetch line items if configured
-                if config.INCLUDE_LINE_ITEMS:
-                    line_items = self.fetch_line_items(billing_account_id, invoice_month)
-                    invoice['line_items'] = line_items
-                
                 invoices.append(invoice)
                 logger.debug(f"Fetched invoice: {invoice['invoice_id']}")
             
@@ -193,8 +177,7 @@ class InvoiceCollector:
             'tax': 0.0,
             'credits': 0.0,
             'status': 'finalized',
-            'fetched_at': datetime.utcnow().isoformat(),
-            'line_items': []
+            'fetched_at': datetime.utcnow().isoformat()
         }
         
         # Extract amounts if available
@@ -227,19 +210,6 @@ class InvoiceCollector:
         
         return invoice
     
-    def fetch_line_items(self, billing_account_id: str, month: str) -> List[Dict[str, Any]]:
-        """
-        Fetch invoice line items for a specific month from BigQuery.
-        
-        Args:
-            billing_account_id: Billing account ID
-            month: Month in YYYY-MM format
-            
-        Returns:
-            List of line item dictionaries
-        """
-        return self.bq_line_items_client.fetch_line_items(billing_account_id, month)
-    
     def _is_past_month(self, month: str) -> bool:
         """Check if month is in the past."""
         month_date = datetime.strptime(month, '%Y-%m')
@@ -267,68 +237,6 @@ class InvoiceCollector:
         due_date = last_day + timedelta(days=30)
         return due_date.strftime('%Y-%m-%d')
     
-    def load_enrichment_data(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Load project enrichment data from Firestore.
-        """
-        logger.info("Loading project enrichment data from Firestore...")
-        
-        try:
-            collection_ref = self.enrichment_client.collection(config.ENRICHMENT_COLLECTION)
-            docs = collection_ref.stream()
-            
-            enrichment_data = {}
-            for doc in docs:
-                doc_dict = doc.to_dict()
-                project_id = doc_dict.get(config.ENRICHMENT_PROJECT_ID_FIELD)
-                
-                if project_id:
-                    # Extract only the fields we need
-                    enrichment_fields = {}
-                    for field in config.ENRICHMENT_FIELD_LIST:
-                        if field in doc_dict:
-                            enrichment_fields[field] = doc_dict[field]
-                    
-                    if enrichment_fields:
-                        enrichment_data[project_id] = enrichment_fields
-            
-            logger.info(f"Loaded enrichment data for {len(enrichment_data)} projects")
-            return enrichment_data
-            
-        except Exception as e:
-            logger.error(f"Error loading enrichment data: {e}")
-            return {}
-    
-    def enrich_line_items(
-        self, 
-        line_items: List[Dict[str, Any]], 
-        enrichment_data: Dict[str, Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Enrich invoice line items with project metadata.
-        """
-        if not line_items:
-            return line_items
-        
-        logger.info(f"Enriching {len(line_items)} line items with project metadata...")
-        
-        enriched_count = 0
-        for item in line_items:
-            project_id = item.get('project_id')
-            
-            if project_id and project_id in enrichment_data:
-                # Add enrichment fields
-                for field, value in enrichment_data[project_id].items():
-                    item[field] = value
-                enriched_count += 1
-            else:
-                # Add null values for missing enrichment fields
-                for field in config.ENRICHMENT_FIELD_LIST:
-                    if field not in item:
-                        item[field] = None
-        
-        logger.info(f"Enriched {enriched_count} out of {len(line_items)} line items")
-        return line_items
     
     def _commit_batch_with_retry(
         self, 
@@ -507,23 +415,11 @@ class InvoiceCollector:
             # Get months to fetch
             months = self.get_invoice_months()
             
-            # Load enrichment data
-            enrichment_data = self.load_enrichment_data()
-            
             # Collect invoices from all billing accounts
             all_invoices = []
             for account_id in billing_accounts:
                 logger.info(f"Processing billing account: {account_id}")
                 invoices = self.fetch_invoices(account_id, months)
-                
-                # Enrich line items
-                for invoice in invoices:
-                    if invoice.get('line_items'):
-                        invoice['line_items'] = self.enrich_line_items(
-                            invoice['line_items'],
-                            enrichment_data
-                        )
-                
                 all_invoices.extend(invoices)
             
             # Generate statistics

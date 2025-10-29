@@ -17,6 +17,7 @@ This module replaces the previous `cost-cron` and `cost-processor` modules with 
 - **Multiple Aggregation Levels**: Daily detailed, daily summary, project total, or service breakdown
 - **Project Enrichment**: Adds appcode, lob, and other metadata to cost records
 - **Batch Processing**: Efficient Firestore batch writes (500 operations per batch)
+- **Retry Logic**: Exponential backoff retry for transient failures and quota errors
 - **Multi-Account Support**: Processes multiple billing accounts
 - **Idempotent**: Uses unique document IDs to prevent duplicates
 
@@ -223,6 +224,8 @@ SELECT
 FROM `project.billing_export.gcp_billing_export_v1_012345_ABCDEF`
 WHERE DATE(usage_start_time) >= '2025-10-22'
     AND DATE(usage_start_time) <= '2025-10-29'
+    AND cost IS NOT NULL
+    AND cost > 0  -- Filter before aggregation for better performance
 GROUP BY date, project_id, service, sku, currency
 ORDER BY date DESC, cost DESC
 ```
@@ -237,9 +240,16 @@ SELECT
 FROM `project.billing_export.gcp_billing_export_v1_012345_ABCDEF`
 WHERE DATE(usage_start_time) >= '2025-10-22'
     AND DATE(usage_start_time) <= '2025-10-29'
+    AND cost IS NOT NULL
+    AND cost > 0  -- Filter before aggregation for better performance
 GROUP BY project_id, currency
 ORDER BY cost DESC
 ```
+
+**Query Optimization:**
+- Filters `cost > 0` in `WHERE` clause (before aggregation) instead of `HAVING` clause (after aggregation)
+- Reduces rows processed during `GROUP BY` operation
+- Improves query performance and reduces BigQuery costs
 
 ## Monitoring
 
@@ -309,6 +319,44 @@ top_projects = sorted(project_totals.items(), key=lambda x: x[1], reverse=True)[
 for project, cost in top_projects:
     print(f"{project}: ${cost:.2f}")
 ```
+
+## Error Handling & Retry Logic
+
+### Firestore Batch Commits
+
+The processor implements robust retry logic for Firestore batch commits:
+
+**Retryable Errors:**
+- `ResourceExhausted` - Quota/rate limit exceeded
+- `DeadlineExceeded` - Request timeout
+- `ServiceUnavailable` - Temporary service issues
+- `Aborted` - Transaction conflicts
+
+**Retry Strategy:**
+- Maximum 3 retry attempts per batch
+- Exponential backoff: 1s, 2s, 4s (with jitter)
+- Failed batches are logged with document IDs for manual recovery
+
+**Example Retry Flow:**
+```
+Batch 1 (500 records):
+  Attempt 1: ResourceExhausted → Wait 1.2s
+  Attempt 2: ResourceExhausted → Wait 2.5s
+  Attempt 3: Success ✓
+  Stats: saved += 500
+
+Batch 2 (300 records):
+  Attempt 1: DeadlineExceeded → Wait 1.3s
+  Attempt 2: Success ✓
+  Stats: saved += 300
+```
+
+### Partial Failure Handling
+
+- Each batch is tracked independently
+- Failed batches don't affect successful batches
+- Statistics report: `{saved: 800, errors: 200}`
+- Failed document IDs are logged for reprocessing
 
 ## Cost
 

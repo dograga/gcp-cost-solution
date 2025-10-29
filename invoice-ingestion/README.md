@@ -1,24 +1,25 @@
 # GCP Invoice Ingestion
 
-A Cloud Run job that collects GCP monthly invoices from the Billing API and stores them in Firestore with project metadata enrichment.
+Cloud Run job that fetches GCP monthly invoices and stores them in Firestore for chargeback purposes.
 
 ## Overview
 
 This job:
-1. Fetches monthly invoices from Cloud Billing API for all accessible billing accounts
-2. Retrieves invoice line items from BigQuery billing export (optional)
-3. Enriches line items with project metadata (appcode, lob) from Firestore
-4. Stores invoices and enriched line items in Firestore
+1. Fetches monthly invoices from Cloud Billing API
+2. Stores invoice summary data in Firestore for chargeback reporting
+
+**Note:** For detailed cost breakdowns, use the `cost-bigquery-processor` module which queries BigQuery billing export directly.
 
 ## Features
 
 - **Multi-Account Support**: Processes multiple billing accounts automatically
 - **Historical Data**: Fetches invoices for configurable months back (default: 12 months)
-- **Line Item Enrichment**: Enriches invoice line items with project metadata
+- **Invoice Summary**: Captures total amount, subtotal, tax, credits, and dates
 - **Idempotent**: Uses invoice_id as document ID to prevent duplicates
 - **Batch Processing**: Efficient batch writes to Firestore (500 operations per batch)
 - **Retry Logic**: Exponential backoff retry for transient failures and quota errors
 - **Environment Support**: Separate configurations for dev/uat/prd environments
+- **Chargeback Ready**: Invoice data structured for chargeback reporting
 
 ## Configuration
 

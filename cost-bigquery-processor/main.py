@@ -6,6 +6,7 @@ Fetches cost data from BigQuery billing export and stores in Firestore with enri
 
 import logging
 import sys
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
@@ -192,6 +193,7 @@ class CostBigQueryProcessor:
             WHERE DATE(usage_start_time) >= '{start_date}'
                 AND DATE(usage_start_time) <= '{end_date}'
                 AND cost IS NOT NULL
+                AND cost > 0
             GROUP BY 
                 date,
                 project_id,
@@ -200,7 +202,6 @@ class CostBigQueryProcessor:
                 sku,
                 currency,
                 usage_unit
-            HAVING cost != 0
             ORDER BY date DESC, cost DESC
             """
         elif config.AGGREGATION_LEVEL == 'daily':
@@ -219,12 +220,12 @@ class CostBigQueryProcessor:
             WHERE DATE(usage_start_time) >= '{start_date}'
                 AND DATE(usage_start_time) <= '{end_date}'
                 AND cost IS NOT NULL
+                AND cost > 0
             GROUP BY 
                 date,
                 project_id,
                 project_name,
                 currency
-            HAVING cost != 0
             ORDER BY date DESC, cost DESC
             """
         elif config.AGGREGATION_LEVEL == 'project':
@@ -243,11 +244,11 @@ class CostBigQueryProcessor:
             WHERE DATE(usage_start_time) >= '{start_date}'
                 AND DATE(usage_start_time) <= '{end_date}'
                 AND cost IS NOT NULL
+                AND cost > 0
             GROUP BY 
                 project_id,
                 project_name,
                 currency
-            HAVING cost != 0
             ORDER BY cost DESC
             """
         else:  # service
@@ -266,13 +267,13 @@ class CostBigQueryProcessor:
             WHERE DATE(usage_start_time) >= '{start_date}'
                 AND DATE(usage_start_time) <= '{end_date}'
                 AND cost IS NOT NULL
+                AND cost > 0
             GROUP BY 
                 date,
                 project_id,
                 project_name,
                 service,
                 currency
-            HAVING cost != 0
             ORDER BY date DESC, cost DESC
             """
         
@@ -348,9 +349,79 @@ class CostBigQueryProcessor:
         logger.info(f"Enriched {enriched_count} out of {len(cost_records)} records")
         return cost_records
     
+    def _commit_batch_with_retry(
+        self, 
+        batch: firestore.WriteBatch, 
+        batch_count: int,
+        max_retries: int = 3
+    ) -> bool:
+        """
+        Commit Firestore batch with exponential backoff retry logic.
+        
+        Args:
+            batch: Firestore WriteBatch to commit
+            batch_count: Number of operations in the batch
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            True if commit succeeded, False otherwise
+        """
+        for attempt in range(max_retries):
+            try:
+                batch.commit()
+                logger.debug(f"Committed batch of {batch_count} records (attempt {attempt + 1})")
+                return True
+                
+            except exceptions.ResourceExhausted as e:
+                # Quota exceeded - use exponential backoff
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + (time.time() % 1)  # Exponential backoff with jitter
+                    logger.warning(f"Quota exceeded, retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to commit batch after {max_retries} attempts: {e}")
+                    return False
+                    
+            except exceptions.DeadlineExceeded as e:
+                # Deadline exceeded - retry with backoff
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + (time.time() % 1)
+                    logger.warning(f"Deadline exceeded, retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to commit batch after {max_retries} attempts: {e}")
+                    return False
+                    
+            except exceptions.ServiceUnavailable as e:
+                # Service temporarily unavailable - retry
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + (time.time() % 1)
+                    logger.warning(f"Service unavailable, retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to commit batch after {max_retries} attempts: {e}")
+                    return False
+                    
+            except exceptions.Aborted as e:
+                # Transaction aborted - retry
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + (time.time() % 1)
+                    logger.warning(f"Transaction aborted, retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to commit batch after {max_retries} attempts: {e}")
+                    return False
+                    
+            except Exception as e:
+                # Other errors - don't retry
+                logger.error(f"Unexpected error committing batch: {e}")
+                return False
+        
+        return False
+    
     def save_to_firestore(self, cost_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Save cost records to Firestore with retry logic.
+        Save cost records to Firestore with retry logic for transient failures.
         
         Args:
             cost_records: List of cost record dictionaries
@@ -367,6 +438,7 @@ class CostBigQueryProcessor:
             batch = self.firestore_client.batch()
             batch_count = 0
             stats = {'saved': 0, 'errors': 0}
+            batch_doc_ids = []  # Track document IDs in current batch
             
             for record in cost_records:
                 try:
@@ -384,14 +456,23 @@ class CostBigQueryProcessor:
                     # Use merge=True for idempotency
                     batch.set(doc_ref, record, merge=True)
                     batch_count += 1
+                    batch_doc_ids.append(doc_id)
                     
                     # Firestore batch limit is 500 operations
                     if batch_count >= 500:
-                        batch.commit()
-                        stats['saved'] += batch_count
-                        logger.debug(f"Committed batch of {batch_count} records")
+                        # Commit with retry logic
+                        if self._commit_batch_with_retry(batch, batch_count):
+                            stats['saved'] += batch_count
+                            logger.info(f"Successfully committed batch of {batch_count} records")
+                        else:
+                            stats['errors'] += batch_count
+                            logger.error(f"Failed to commit batch of {batch_count} records")
+                            logger.error(f"Failed document IDs (first 10): {batch_doc_ids[:10]}")
+                        
+                        # Reset for next batch
                         batch = self.firestore_client.batch()
                         batch_count = 0
+                        batch_doc_ids = []
                 
                 except Exception as e:
                     logger.error(f"Error preparing record: {e}")
@@ -399,10 +480,15 @@ class CostBigQueryProcessor:
             
             # Commit remaining records
             if batch_count > 0:
-                batch.commit()
-                stats['saved'] += batch_count
+                if self._commit_batch_with_retry(batch, batch_count):
+                    stats['saved'] += batch_count
+                    logger.info(f"Successfully committed final batch of {batch_count} records")
+                else:
+                    stats['errors'] += batch_count
+                    logger.error(f"Failed to commit final batch of {batch_count} records")
+                    logger.error(f"Failed document IDs (first 10): {batch_doc_ids[:10]}")
             
-            logger.info(f"Successfully saved {stats['saved']} records to Firestore")
+            logger.info(f"Save complete: {stats['saved']} saved, {stats['errors']} errors")
             return stats
                 
         except Exception as e:
