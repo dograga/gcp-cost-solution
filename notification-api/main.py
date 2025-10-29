@@ -186,17 +186,7 @@ async def post_to_teams_with_retry(
 async def post_to_teams_channel(request: TeamsMessageRequest):
     """
     Post a message to Microsoft Teams channel via webhook with retry logic.
-    
     Automatically retries on transient errors (502, 503, 504, 429) with exponential backoff.
-    
-    Args:
-        request: TeamsMessageRequest containing webhook URL and message
-        
-    Returns:
-        TeamsMessageResponse with success status
-        
-    Raises:
-        HTTPException: If posting to Teams fails after retries
     """
     logger.info(f"Posting message to Teams channel")
     
@@ -261,44 +251,87 @@ def build_teams_message_card(
     facts: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
-    Build Microsoft Teams message card in Adaptive Card format.
+    Build Microsoft Teams message using Adaptive Card format.
     
-    Args:
-        title: Optional message title
-        message: Message text
-        color: Hex color code (without #)
-        facts: Optional key-value pairs
-        
-    Returns:
-        Teams message card dictionary
+    Adaptive Cards provide richer UI and better long-term Teams support.
     """
-    # Build message card using MessageCard format (legacy but widely supported)
-    card = {
-        "@type": "MessageCard",
-        "@context": "https://schema.org/extensions",
-        "themeColor": color,
-        "summary": title or message[:100],
+    # Map hex color to Adaptive Card accent color
+    # Adaptive Cards support: default, dark, light, accent, good, warning, attention
+    color_map = {
+        "0078D4": "accent",      # Microsoft Blue (default)
+        "00FF00": "good",        # Green (success)
+        "28A745": "good",        # Green (success)
+        "FFA500": "warning",     # Orange (warning)
+        "FFC107": "warning",     # Yellow (warning)
+        "FF0000": "attention",   # Red (error)
+        "DC3545": "attention",   # Red (error)
+        "8B0000": "attention",   # Dark Red (critical)
     }
     
-    # Add title if provided
-    if title:
-        card["title"] = title
+    accent_color = color_map.get(color.upper(), "accent")
+    
+    # Build body elements
+    body = []
+    
+    # Add colored accent bar using Container
+    body.append({
+        "type": "Container",
+        "style": accent_color,
+        "items": [
+            {
+                "type": "TextBlock",
+                "text": title if title else "Notification",
+                "weight": "bolder",
+                "size": "large",
+                "wrap": True
+            }
+        ],
+        "bleed": True
+    })
     
     # Add message text
-    card["text"] = message
+    body.append({
+        "type": "TextBlock",
+        "text": message,
+        "wrap": True,
+        "spacing": "medium"
+    })
     
-    # Add facts if provided
+    # Add facts as FactSet if provided
     if facts:
-        card["sections"] = [
+        fact_set = {
+            "type": "FactSet",
+            "facts": [
+                {"title": key, "value": value}
+                for key, value in facts.items()
+            ],
+            "spacing": "medium"
+        }
+        body.append(fact_set)
+    
+    # Build Adaptive Card
+    adaptive_card = {
+        "type": "AdaptiveCard",
+        "body": body,
+        "msteams": {
+            "width": "Full"
+        },
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4"
+    }
+    
+    # Wrap in message attachment format
+    message_payload = {
+        "type": "message",
+        "attachments": [
             {
-                "facts": [
-                    {"name": key, "value": value}
-                    for key, value in facts.items()
-                ]
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
             }
         ]
+    }
     
-    return card
+    return message_payload
 
 
 # Alternative endpoint with simple text message

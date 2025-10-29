@@ -10,6 +10,7 @@ This API provides endpoints to send formatted messages to Microsoft Teams channe
 
 - **FastAPI Framework**: Modern, fast, async API framework
 - **Teams Integration**: Post messages to Teams channels via webhooks
+- **Adaptive Cards**: Modern card format with rich UI and better Teams support
 - **Message Formatting**: Support for titles, colors, and fact tables
 - **Retry Logic**: Automatic retry with exponential backoff for transient errors (502, 503, 504, 429)
 - **Error Handling**: Comprehensive error handling with proper HTTP status codes
@@ -230,15 +231,77 @@ const data = await response.json();
 console.log(data);
 ```
 
+## Adaptive Cards
+
+The API uses **Adaptive Cards v1.4** format for rich, modern Teams messages.
+
+### Card Structure
+
+```json
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "content": {
+        "type": "AdaptiveCard",
+        "body": [
+          {
+            "type": "Container",
+            "style": "attention",
+            "items": [
+              {
+                "type": "TextBlock",
+                "text": "Cost Alert",
+                "weight": "bolder",
+                "size": "large"
+              }
+            ]
+          },
+          {
+            "type": "TextBlock",
+            "text": "Project XYZ exceeded budget by 20%"
+          },
+          {
+            "type": "FactSet",
+            "facts": [
+              {"title": "Project", "value": "XYZ"},
+              {"title": "Cost", "value": "$1,250"}
+            ]
+          }
+        ],
+        "version": "1.4"
+      }
+    }
+  ]
+}
+```
+
+### Benefits of Adaptive Cards
+
+- ✅ **Modern UI**: Richer visual elements and better styling
+- ✅ **Better Support**: Microsoft's recommended format for Teams
+- ✅ **Responsive**: Adapts to different screen sizes
+- ✅ **Future-Proof**: Long-term support and new features
+- ✅ **Consistent**: Same look across Teams desktop, mobile, and web
+
 ## Message Colors
 
-Common color codes for different message types:
+The API maps hex color codes to Adaptive Card styles:
 
-- **Info**: `0078D4` (Microsoft Blue)
-- **Success**: `00FF00` or `28A745` (Green)
-- **Warning**: `FFA500` or `FFC107` (Orange/Yellow)
-- **Error**: `FF0000` or `DC3545` (Red)
-- **Critical**: `8B0000` (Dark Red)
+| Hex Color | Style | Use Case |
+|-----------|-------|----------|
+| `0078D4` | `accent` | Info (Microsoft Blue) |
+| `00FF00`, `28A745` | `good` | Success (Green) |
+| `FFA500`, `FFC107` | `warning` | Warning (Orange/Yellow) |
+| `FF0000`, `DC3545` | `attention` | Error (Red) |
+| `8B0000` | `attention` | Critical (Dark Red) |
+
+**Adaptive Card Styles:**
+- **accent**: Blue background (default)
+- **good**: Green background (success)
+- **warning**: Yellow background (warning)
+- **attention**: Red background (error/critical)
 
 ## Integration Examples
 
