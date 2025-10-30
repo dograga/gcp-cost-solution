@@ -3,25 +3,29 @@
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import HttpUrl
-import httpx
 import logging
-import asyncio
 import base64
 import json
-from typing import Dict, Any
 from datetime import datetime
 
+import config
 from dataclass import (
     TeamsMessageRequest,
     TeamsMessageResponse,
-    PubSubMessage,
-    PubSubNotification,
     HealthResponse,
-    TeamsColor
+    AddTeamsChannelRequest,
+    AddTeamsChannelResponse
+)
+from helper import (
+    create_or_update_secret,
+    get_secret,
+    save_channel_metadata,
+    post_to_teams_with_retry,
+    build_teams_message_card
 )
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -34,7 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,50 +66,52 @@ async def health_check():
     )
 
 
-async def post_to_teams_with_retry(
-    webhook_url: str,
-    message_card: Dict[str, Any],
-    max_retries: int = 3
-) -> httpx.Response:
-    """Post to Teams with retry on transient errors (502, 503, 504, 429)"""
-    retryable_status_codes = {502, 503, 504, 429}
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for attempt in range(max_retries):
-            try:
-                response = await client.post(
-                    webhook_url,
-                    json=message_card,
-                    headers={"Content-Type": "application/json"}
-                )
-                
-                if response.status_code == 200:
-                    if attempt > 0:
-                        logger.info(f"Posted to Teams after {attempt + 1} attempts")
-                    return response
-                
-                if response.status_code in retryable_status_codes and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
-                    logger.warning(f"Retry {attempt + 1}/{max_retries} after {response.status_code}")
-                    await asyncio.sleep(wait_time)
-                    continue
-                
-                logger.error(f"Teams webhook failed: {response.status_code}")
-                return response
-                
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + (asyncio.get_event_loop().time() % 1)
-                    logger.warning(f"Network error, retry {attempt + 1}/{max_retries}")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise
-            
-            except httpx.RequestError as e:
-                logger.error(f"Request error: {e}")
-                raise
-    
-    raise httpx.HTTPStatusError("Max retries exceeded", request=None, response=None)
+@app.post("/add-teams-channel", response_model=AddTeamsChannelResponse, status_code=status.HTTP_201_CREATED)
+async def add_teams_channel(request: AddTeamsChannelRequest):
+    """
+    Register a Teams notification channel.
+    - Stores webhook URL in Secret Manager
+    - Stores metadata in Firestore
+    - Document ID: {app_code}-{alert_type}
+    - Secret ID: {app_code}-{alert_type}
+    """
+    try:
+        doc_id = f"{request.app_code}-{request.alert_type}"
+        secret_id = doc_id
+        
+        logger.info(f"Registering Teams channel: {doc_id}")
+        
+        # Store webhook URL in Secret Manager
+        secret_version = create_or_update_secret(secret_id, str(request.url))
+        
+        # Store metadata in Firestore
+        save_channel_metadata(
+            collection_name=config.FIRESTORE_COLLECTION,
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            secret_id=secret_id,
+            secret_version=secret_version,
+            updated_by=request.updated_by,
+            timestamp=request.timestamp
+        )
+        
+        logger.info(f"Successfully registered channel: {doc_id}")
+        
+        return AddTeamsChannelResponse(
+            success=True,
+            message="Teams channel registered successfully (URL stored in Secret Manager)",
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type
+        )
+        
+    except Exception as e:
+        logger.error(f"Error registering Teams channel: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to register Teams channel: {str(e)}"
+        )
 
 
 @app.post("/post-team-channel", response_model=TeamsMessageResponse, status_code=status.HTTP_200_OK)
@@ -168,96 +174,6 @@ async def post_to_teams_channel(request: TeamsMessageRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}"
         )
-
-
-def build_teams_message_card(
-    title: Optional[str],
-    message: str,
-    color: str = "0078D4",
-    facts: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
-    """
-    Build Microsoft Teams message using Adaptive Card format.
-    
-    Adaptive Cards provide richer UI and better long-term Teams support.
-    """
-    # Map hex color to Adaptive Card accent color
-    # Adaptive Cards support: default, dark, light, accent, good, warning, attention
-    color_map = {
-        "0078D4": "accent",      # Microsoft Blue (default)
-        "00FF00": "good",        # Green (success)
-        "28A745": "good",        # Green (success)
-        "FFA500": "warning",     # Orange (warning)
-        "FFC107": "warning",     # Yellow (warning)
-        "FF0000": "attention",   # Red (error)
-        "DC3545": "attention",   # Red (error)
-        "8B0000": "attention",   # Dark Red (critical)
-    }
-    
-    accent_color = color_map.get(color.upper(), "accent")
-    
-    # Build body elements
-    body = []
-    
-    # Add colored accent bar using Container
-    body.append({
-        "type": "Container",
-        "style": accent_color,
-        "items": [
-            {
-                "type": "TextBlock",
-                "text": title if title else "Notification",
-                "weight": "bolder",
-                "size": "large",
-                "wrap": True
-            }
-        ],
-        "bleed": True
-    })
-    
-    # Add message text
-    body.append({
-        "type": "TextBlock",
-        "text": message,
-        "wrap": True,
-        "spacing": "medium"
-    })
-    
-    # Add facts as FactSet if provided
-    if facts:
-        fact_set = {
-            "type": "FactSet",
-            "facts": [
-                {"title": key, "value": value}
-                for key, value in facts.items()
-            ],
-            "spacing": "medium"
-        }
-        body.append(fact_set)
-    
-    # Build Adaptive Card
-    adaptive_card = {
-        "type": "AdaptiveCard",
-        "body": body,
-        "msteams": {
-            "width": "Full"
-        },
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.4"
-    }
-    
-    # Wrap in message attachment format
-    message_payload = {
-        "type": "message",
-        "attachments": [
-            {
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }
-        ]
-    }
-    
-    return message_payload
 
 
 @app.post("/post-simple-message", response_model=TeamsMessageResponse)

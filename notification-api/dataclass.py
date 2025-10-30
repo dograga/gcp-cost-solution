@@ -92,3 +92,29 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: str
     version: str
+
+
+class AddTeamsChannelRequest(BaseModel):
+    """Request to register a Teams notification channel"""
+    app_code: str = Field(..., min_length=1, max_length=100, description="Application code")
+    alert_type: str = Field(..., min_length=1, max_length=100, description="Alert type")
+    url: HttpUrl = Field(..., description="Teams webhook URL")
+    updated_by: str = Field(..., min_length=1, max_length=100, description="User who updated")
+    timestamp: str = Field(..., description="ISO timestamp")
+    
+    @field_validator('app_code', 'alert_type')
+    @classmethod
+    def validate_no_special_chars(cls, v: str) -> str:
+        """Ensure no special characters that could break document ID"""
+        if '-' in v:
+            raise ValueError("app_code and alert_type cannot contain hyphens")
+        return v.strip()
+
+
+class AddTeamsChannelResponse(BaseModel):
+    """Response for Teams channel registration"""
+    success: bool
+    message: str
+    doc_id: str
+    app_code: str
+    alert_type: str

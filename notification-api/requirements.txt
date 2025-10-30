@@ -3,3 +3,5 @@ uvicorn[standard]==0.24.0
 httpx==0.25.1
 pydantic==2.5.0
 python-dotenv==1.0.0
+google-cloud-firestore==2.13.1
+google-cloud-secret-manager==2.16.4

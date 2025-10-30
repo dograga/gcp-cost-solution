@@ -70,6 +70,79 @@ Post a simple text message (query parameters).
 curl -X POST "http://localhost:8080/post-simple-message?webhook_url=https://outlook.office.com/webhook/...&message=Hello%20Teams"
 ```
 
+### POST /add-teams-channel
+
+Register a Teams notification channel with secure webhook URL storage.
+
+**Request Body:**
+```json
+{
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "url": "https://outlook.office.com/webhook/...",
+  "updated_by": "john.doe@company.com",
+  "timestamp": "2025-10-30T12:00:00Z"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Teams channel registered successfully (URL stored in Secret Manager)",
+  "doc_id": "cost-alerts-budget-exceeded",
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded"
+}
+```
+
+**Security Architecture:**
+
+1. **Webhook URL** → Stored in **Secret Manager**
+   - Secret ID: `{app_code}-{alert_type}`
+   - Example: `cost-alerts-budget-exceeded`
+   - Encrypted at rest
+   - Access controlled via IAM
+
+2. **Metadata** → Stored in **Firestore**
+   - Collection: Configurable via `FIRESTORE_COLLECTION` env var
+   - Document ID: `{app_code}-{alert_type}`
+   - Does NOT contain webhook URL
+
+**Document ID & Secret ID Format:**
+- Format: `{app_code}-{alert_type}`
+- Example: `cost-alerts-budget-exceeded`
+- Ensures atomicity (upsert behavior)
+
+**Firestore Document Structure:**
+```json
+{
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "secret_id": "cost-alerts-budget-exceeded",
+  "secret_version": "projects/123/secrets/cost-alerts-budget-exceeded/versions/1",
+  "updated_by": "john.doe@company.com",
+  "timestamp": "2025-10-30T12:00:00Z",
+  "created_at": "2025-10-30T12:00:00.123Z",
+  "last_modified": "2025-10-30T12:00:00.123Z"
+}
+```
+
+**Secret Manager:**
+- Secret ID: `cost-alerts-budget-exceeded`
+- Secret Value: `https://outlook.office.com/webhook/...`
+- Automatic replication
+- Versioned (supports updates)
+
+**Validation:**
+- `app_code` and `alert_type` cannot contain hyphens
+- All fields are required
+- URL must be valid Teams webhook URL
+
+**Configuration:**
+- Collection name: Set via `FIRESTORE_COLLECTION` in `.env.{env}`
+- Example: `teams-notification-channels-dev`
+
 ### POST /pubsub-notification
 
 Pub/Sub push subscription endpoint for event-driven notifications.
@@ -189,6 +262,72 @@ future = publisher.publish(topic_path, data)
 print(f"Published message ID: {future.result()}")
 ```
 
+## Configuration
+
+### Environment Variables
+
+Create environment-specific configuration files:
+
+**.env.dev:**
+```bash
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8080
+LOG_LEVEL=INFO
+ALLOWED_ORIGINS=*
+
+# GCP Configuration
+GCP_PROJECT_ID=my-project-dev
+
+# Firestore Configuration
+FIRESTORE_COLLECTION=teams-notification-channels-dev
+```
+
+**.env.uat:**
+```bash
+GCP_PROJECT_ID=my-project-uat
+FIRESTORE_COLLECTION=teams-notification-channels-uat
+LOG_LEVEL=INFO
+```
+
+**.env.prod:**
+```bash
+GCP_PROJECT_ID=my-project-prod
+FIRESTORE_COLLECTION=teams-notification-channels
+LOG_LEVEL=WARNING
+```
+
+### Running with Environment
+
+```bash
+# Development
+ENVIRONMENT=dev python main.py
+
+# UAT
+ENVIRONMENT=uat python main.py
+
+# Production
+ENVIRONMENT=prod python main.py
+```
+
+### GCP Permissions Required
+
+**Service Account needs:**
+- `roles/secretmanager.admin` - Create/update secrets
+- `roles/secretmanager.secretAccessor` - Read secrets
+- `roles/datastore.user` - Firestore read/write
+
+**Grant permissions:**
+```bash
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.admin"
+
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/datastore.user"
+```
+
 ## Setup Microsoft Teams Webhook
 
 ### Create Incoming Webhook in Teams
@@ -262,7 +401,34 @@ gcloud run deploy notification-api \
 
 ## Usage Examples
 
-### Python
+### Register Teams Channel
+
+```python
+import requests
+from datetime import datetime
+
+# Register a Teams notification channel
+url = "http://localhost:8080/add-teams-channel"
+payload = {
+    "app_code": "cost-alerts",
+    "alert_type": "budget-exceeded",
+    "url": "https://outlook.office.com/webhook/...",
+    "updated_by": "admin@company.com",
+    "timestamp": datetime.utcnow().isoformat() + "Z"
+}
+
+response = requests.post(url, json=payload)
+print(response.json())
+# Output: {
+#   "success": true,
+#   "message": "Teams channel registered successfully",
+#   "doc_id": "cost-alerts-budget-exceeded",
+#   "app_code": "cost-alerts",
+#   "alert_type": "budget-exceeded"
+# }
+```
+
+### Post Message to Teams
 
 ```python
 import requests
