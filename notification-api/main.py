@@ -18,12 +18,16 @@ from dataclass import (
     InitiateChannelVerificationRequest,
     InitiateChannelVerificationResponse,
     VerifyChannelRequest,
-    VerifyChannelResponse
+    VerifyChannelResponse,
+    DeleteChannelRequest,
+    DeleteChannelResponse
 )
 from helper import (
     create_or_update_secret,
     get_secret,
+    delete_secret,
     save_channel_metadata,
+    delete_channel_metadata,
     post_to_teams_with_retry,
     build_teams_message_card,
     generate_verification_code,
@@ -255,6 +259,55 @@ async def add_teams_channel(request: AddTeamsChannelRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to initiate channel registration: {str(e)}"
+        )
+
+
+@app.delete("/delete-teams-channel", response_model=DeleteChannelResponse, status_code=status.HTTP_200_OK)
+async def delete_teams_channel(request: DeleteChannelRequest):
+    """
+    Delete a Teams notification channel.
+    - Deletes webhook URL from Secret Manager
+    - Deletes metadata from Firestore
+    - Document ID: {app_code}-{alert_type}
+    - Secret ID: {app_code}-{alert_type}
+    """
+    try:
+        doc_id = f"{request.app_code}-{request.alert_type}"
+        secret_id = doc_id
+        
+        logger.info(f"Deleting Teams channel: {doc_id}")
+        
+        # Delete from Firestore
+        deleted_firestore = delete_channel_metadata(doc_id)
+        
+        # Delete from Secret Manager
+        deleted_secret = delete_secret(secret_id)
+        
+        if not deleted_firestore and not deleted_secret:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Channel not found: {doc_id}"
+            )
+        
+        logger.info(f"Successfully deleted channel: {doc_id} (Firestore: {deleted_firestore}, Secret: {deleted_secret})")
+        
+        return DeleteChannelResponse(
+            success=True,
+            message=f"Channel deleted successfully",
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            deleted_from_firestore=deleted_firestore,
+            deleted_from_secret_manager=deleted_secret
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting Teams channel: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete Teams channel: {str(e)}"
         )
 
 

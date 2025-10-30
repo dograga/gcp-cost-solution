@@ -63,6 +63,20 @@ def get_secret(secret_id: str) -> str:
         raise
 
 
+def delete_secret(secret_id: str) -> bool:
+    """Delete a secret from Secret Manager"""
+    secret_path = f"projects/{config.GCP_PROJECT_ID}/secrets/{secret_id}"
+    
+    try:
+        secret_client.delete_secret(request={"name": secret_path})
+        logger.info(f"Deleted secret: {secret_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting secret {secret_id}: {e}")
+        # Return False if secret doesn't exist or other error
+        return False
+
+
 # Firestore functions
 def save_channel_metadata(
     collection_name: str,
@@ -137,6 +151,24 @@ def delete_pending_verification(doc_id: str) -> None:
     doc_ref = db.collection(collection_name).document(doc_id)
     doc_ref.delete()
     logger.info(f"Deleted pending verification: {doc_id}")
+
+
+def delete_channel_metadata(doc_id: str) -> bool:
+    """Delete channel metadata from Firestore"""
+    try:
+        doc_ref = db.collection(config.FIRESTORE_COLLECTION).document(doc_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            logger.warning(f"Channel not found in Firestore: {doc_id}")
+            return False
+        
+        doc_ref.delete()
+        logger.info(f"Deleted channel metadata from Firestore: {doc_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting channel metadata {doc_id}: {e}")
+        return False
 
 
 # Verification code functions

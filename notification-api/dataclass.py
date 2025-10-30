@@ -162,3 +162,20 @@ class VerifyChannelResponse(BaseModel):
     app_code: str
     alert_type: str
     verified: bool
+
+
+class DeleteChannelRequest(BaseModel):
+    """Request to delete a Teams channel"""
+    app_code: str = Field(..., min_length=1, max_length=100)
+    alert_type: str = Field(..., min_length=1, max_length=100)
+
+
+class DeleteChannelResponse(BaseModel):
+    """Response for channel deletion"""
+    success: bool
+    message: str
+    doc_id: str
+    app_code: str
+    alert_type: str
+    deleted_from_firestore: bool
+    deleted_from_secret_manager: bool

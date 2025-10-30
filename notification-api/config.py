@@ -34,7 +34,16 @@ FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'teams-notificatio
 # Verification Configuration
 VERIFICATION_CODE_EXPIRY_MINUTES = int(os.environ.get('VERIFICATION_CODE_EXPIRY_MINUTES', '15'))
 
+# OAuth Configuration
+GCP_OAUTH_CLIENT_ID = os.environ.get('GCP_OAUTH_CLIENT_ID')
+if not GCP_OAUTH_CLIENT_ID:
+    raise ValueError(f"GCP_OAUTH_CLIENT_ID must be set in .env.{ENVIRONMENT} or environment variables")
+
+# Audit Configuration
+AUDIT_COLLECTION = os.environ.get('AUDIT_COLLECTION', 'notification-events')
+
 print(f"Environment: {ENVIRONMENT}")
 print(f"GCP Project: {GCP_PROJECT_ID}")
 print(f"Firestore Collection: {FIRESTORE_COLLECTION}")
+print(f"Audit Collection: {AUDIT_COLLECTION}")
 print(f"Verification Code Expiry: {VERIFICATION_CODE_EXPIRY_MINUTES} minutes")

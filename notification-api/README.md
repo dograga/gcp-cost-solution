@@ -200,6 +200,54 @@ Register a Teams notification channel (now uses verification flow).
 
 **Next Step:** Call `/verify-channel` with the verification code to complete registration.
 
+### DELETE /delete-teams-channel
+
+Delete a registered Teams notification channel.
+
+**Request Body:**
+```json
+{
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Channel deleted successfully",
+  "doc_id": "cost-alerts-budget-exceeded",
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "deleted_from_firestore": true,
+  "deleted_from_secret_manager": true
+}
+```
+
+**What happens:**
+1. Deletes webhook URL from Secret Manager
+2. Deletes metadata from Firestore
+3. Returns status for both operations
+
+**Error Response (Not Found):**
+```json
+{
+  "detail": "Channel not found: cost-alerts-budget-exceeded"
+}
+```
+
+**Partial Deletion:**
+If the channel exists in only one location (Firestore or Secret Manager), it will delete from that location and return success:
+```json
+{
+  "success": true,
+  "message": "Channel deleted successfully",
+  "deleted_from_firestore": true,
+  "deleted_from_secret_manager": false
+}
+```
+
 **Security Architecture:**
 
 1. **Webhook URL** → Stored in **Secret Manager**
@@ -607,6 +655,33 @@ verify_response = requests.post(
     }
 )
 print(verify_response.json())
+```
+
+### Delete Teams Channel
+
+```python
+import requests
+
+# Delete a registered channel
+url = "http://localhost:8080/delete-teams-channel"
+payload = {
+    "app_code": "cost-alerts",
+    "alert_type": "budget-exceeded"
+}
+
+response = requests.delete(url, json=payload)
+result = response.json()
+
+print(f"Deleted from Firestore: {result['deleted_from_firestore']}")
+print(f"Deleted from Secret Manager: {result['deleted_from_secret_manager']}")
+
+# Output: {
+#   "success": true,
+#   "message": "Channel deleted successfully",
+#   "doc_id": "cost-alerts-budget-exceeded",
+#   "deleted_from_firestore": true,
+#   "deleted_from_secret_manager": true
+# }
 ```
 
 ### Post Message to Teams
