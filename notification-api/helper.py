@@ -147,6 +147,8 @@ def generate_verification_code() -> str:
 
 async def send_verification_code_to_teams(webhook_url: str, verification_code: str, app_code: str, alert_type: str) -> bool:
     """Send verification code to Teams channel"""
+    expiry_minutes = config.VERIFICATION_CODE_EXPIRY_MINUTES
+    
     message_card = {
         "type": "message",
         "attachments": [{
@@ -183,7 +185,7 @@ async def send_verification_code_to_teams(webhook_url: str, verification_code: s
                     },
                     {
                         "type": "TextBlock",
-                        "text": "⚠️ This code expires in 15 minutes. Enter this code in the registration UI to complete setup.",
+                        "text": f"⚠️ This code expires in {expiry_minutes} minutes. Enter this code in the registration UI to complete setup.",
                         "wrap": True,
                         "spacing": "medium",
                         "color": "warning",

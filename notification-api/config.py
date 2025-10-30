@@ -31,6 +31,10 @@ if not GCP_PROJECT_ID:
 # Firestore Configuration
 FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'teams-notification-channels')
 
+# Verification Configuration
+VERIFICATION_CODE_EXPIRY_MINUTES = int(os.environ.get('VERIFICATION_CODE_EXPIRY_MINUTES', '15'))
+
 print(f"Environment: {ENVIRONMENT}")
 print(f"GCP Project: {GCP_PROJECT_ID}")
 print(f"Firestore Collection: {FIRESTORE_COLLECTION}")
+print(f"Verification Code Expiry: {VERIFICATION_CODE_EXPIRY_MINUTES} minutes")

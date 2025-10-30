@@ -170,9 +170,11 @@ Verification Code: **123456**
 }
 ```
 
-### POST /add-teams-channel (Legacy - Direct Registration)
+### POST /add-teams-channel
 
-Register a Teams notification channel with secure webhook URL storage (without verification).
+Register a Teams notification channel (now uses verification flow).
+
+**⚠️ Breaking Change:** This endpoint now initiates verification instead of direct registration.
 
 **Request Body:**
 ```json
@@ -185,16 +187,18 @@ Register a Teams notification channel with secure webhook URL storage (without v
 }
 ```
 
-**Response:**
+**Response:** (Same as `/initiate-channel-verification`)
 ```json
 {
   "success": true,
-  "message": "Teams channel registered successfully (URL stored in Secret Manager)",
+  "message": "Verification code sent to Teams channel. Please check the channel and enter the code.",
   "doc_id": "cost-alerts-budget-exceeded",
-  "app_code": "cost-alerts",
-  "alert_type": "budget-exceeded"
+  "verification_code": "123456",
+  "expires_at": "2025-10-30T12:15:00Z"
 }
 ```
+
+**Next Step:** Call `/verify-channel` with the verification code to complete registration.
 
 **Security Architecture:**
 
@@ -400,12 +404,16 @@ GCP_PROJECT_ID=my-project-dev
 
 # Firestore Configuration
 FIRESTORE_COLLECTION=teams-notification-channels-dev
+
+# Verification Configuration
+VERIFICATION_CODE_EXPIRY_MINUTES=15
 ```
 
 **.env.uat:**
 ```bash
 GCP_PROJECT_ID=my-project-uat
 FIRESTORE_COLLECTION=teams-notification-channels-uat
+VERIFICATION_CODE_EXPIRY_MINUTES=15
 LOG_LEVEL=INFO
 ```
 
@@ -413,6 +421,7 @@ LOG_LEVEL=INFO
 ```bash
 GCP_PROJECT_ID=my-project-prod
 FIRESTORE_COLLECTION=teams-notification-channels
+VERIFICATION_CODE_EXPIRY_MINUTES=10
 LOG_LEVEL=WARNING
 ```
 
@@ -564,13 +573,13 @@ print(verify_response.json())
 # }
 ```
 
-### Register Teams Channel (Legacy - Without Verification)
+### Register Teams Channel (Using /add-teams-channel)
 
 ```python
 import requests
 from datetime import datetime
 
-# Direct registration (no verification)
+# Step 1: Call add-teams-channel (now initiates verification)
 url = "http://localhost:8080/add-teams-channel"
 payload = {
     "app_code": "cost-alerts",
@@ -581,7 +590,23 @@ payload = {
 }
 
 response = requests.post(url, json=payload)
-print(response.json())
+result = response.json()
+print(f"Verification code sent: {result['verification_code']}")
+
+# Step 2: User enters code from Teams
+verification_code = input("Enter verification code from Teams: ")
+
+# Step 3: Verify channel
+verify_response = requests.post(
+    "http://localhost:8080/verify-channel",
+    json={
+        "app_code": "cost-alerts",
+        "alert_type": "budget-exceeded",
+        "verification_code": verification_code,
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+)
+print(verify_response.json())
 ```
 
 ### Post Message to Teams

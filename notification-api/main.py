@@ -92,9 +92,9 @@ async def initiate_channel_verification(request: InitiateChannelVerificationRequ
         # Generate verification code
         verification_code = generate_verification_code()
         
-        # Calculate expiration (15 minutes)
+        # Calculate expiration (configurable)
         from datetime import timedelta
-        expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        expires_at = (datetime.utcnow() + timedelta(minutes=config.VERIFICATION_CODE_EXPIRY_MINUTES)).isoformat()
         
         # Send verification code to Teams
         logger.info(f"Sending verification code to Teams: {doc_id}")
@@ -224,51 +224,37 @@ async def verify_channel(request: VerifyChannelRequest):
         )
 
 
-@app.post("/add-teams-channel", response_model=AddTeamsChannelResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/add-teams-channel", response_model=InitiateChannelVerificationResponse, status_code=status.HTTP_200_OK)
 async def add_teams_channel(request: AddTeamsChannelRequest):
     """
-    Register a Teams notification channel.
-    - Stores webhook URL in Secret Manager
-    - Stores metadata in Firestore
-    - Document ID: {app_code}-{alert_type}
-    - Secret ID: {app_code}-{alert_type}
+    Register a Teams notification channel (with verification).
+    
+    This endpoint now initiates the verification process.
+    Use /verify-channel to complete registration after receiving the code.
+    
+    Steps:
+    1. Calls this endpoint with webhook URL
+    2. Verification code sent to Teams channel
+    3. User enters code via /verify-channel
+    4. Channel registered after successful verification
     """
     try:
-        doc_id = f"{request.app_code}-{request.alert_type}"
-        secret_id = doc_id
-        
-        logger.info(f"Registering Teams channel: {doc_id}")
-        
-        # Store webhook URL in Secret Manager
-        secret_version = create_or_update_secret(secret_id, str(request.url))
-        
-        # Store metadata in Firestore
-        save_channel_metadata(
-            collection_name=config.FIRESTORE_COLLECTION,
-            doc_id=doc_id,
+        # Convert to verification request
+        verification_request = InitiateChannelVerificationRequest(
             app_code=request.app_code,
             alert_type=request.alert_type,
-            secret_id=secret_id,
-            secret_version=secret_version,
-            updated_by=request.updated_by,
-            timestamp=request.timestamp
+            url=request.url,
+            updated_by=request.updated_by
         )
         
-        logger.info(f"Successfully registered channel: {doc_id}")
-        
-        return AddTeamsChannelResponse(
-            success=True,
-            message="Teams channel registered successfully (URL stored in Secret Manager)",
-            doc_id=doc_id,
-            app_code=request.app_code,
-            alert_type=request.alert_type
-        )
+        # Delegate to verification flow
+        return await initiate_channel_verification(verification_request)
         
     except Exception as e:
-        logger.error(f"Error registering Teams channel: {e}", exc_info=True)
+        logger.error(f"Error initiating channel registration: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to register Teams channel: {str(e)}"
+            detail=f"Failed to initiate channel registration: {str(e)}"
         )
 
 
