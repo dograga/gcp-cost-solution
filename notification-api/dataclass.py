@@ -119,3 +119,46 @@ class AddTeamsChannelResponse(BaseModel):
     doc_id: str
     app_code: str
     alert_type: str
+
+
+class InitiateChannelVerificationRequest(BaseModel):
+    """Request to initiate channel verification"""
+    app_code: str = Field(..., min_length=1, max_length=100, description="Application code")
+    alert_type: str = Field(..., min_length=1, max_length=100, description="Alert type")
+    url: HttpUrl = Field(..., description="Teams webhook URL to verify")
+    updated_by: str = Field(..., min_length=1, max_length=100, description="User who is registering")
+    
+    @field_validator('app_code', 'alert_type')
+    @classmethod
+    def validate_no_special_chars(cls, v: str) -> str:
+        """Ensure no special characters that could break document ID"""
+        if '-' in v:
+            raise ValueError("app_code and alert_type cannot contain hyphens")
+        return v.strip()
+
+
+class InitiateChannelVerificationResponse(BaseModel):
+    """Response for channel verification initiation"""
+    success: bool
+    message: str
+    doc_id: str
+    verification_code: str
+    expires_at: str
+
+
+class VerifyChannelRequest(BaseModel):
+    """Request to verify channel with code"""
+    app_code: str = Field(..., min_length=1, max_length=100)
+    alert_type: str = Field(..., min_length=1, max_length=100)
+    verification_code: str = Field(..., min_length=6, max_length=6, description="6-digit verification code")
+    timestamp: str = Field(..., description="ISO timestamp")
+
+
+class VerifyChannelResponse(BaseModel):
+    """Response for channel verification"""
+    success: bool
+    message: str
+    doc_id: str
+    app_code: str
+    alert_type: str
+    verified: bool

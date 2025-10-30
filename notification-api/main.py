@@ -14,14 +14,23 @@ from dataclass import (
     TeamsMessageResponse,
     HealthResponse,
     AddTeamsChannelRequest,
-    AddTeamsChannelResponse
+    AddTeamsChannelResponse,
+    InitiateChannelVerificationRequest,
+    InitiateChannelVerificationResponse,
+    VerifyChannelRequest,
+    VerifyChannelResponse
 )
 from helper import (
     create_or_update_secret,
     get_secret,
     save_channel_metadata,
     post_to_teams_with_retry,
-    build_teams_message_card
+    build_teams_message_card,
+    generate_verification_code,
+    send_verification_code_to_teams,
+    save_pending_verification,
+    get_pending_verification,
+    delete_pending_verification
 )
 
 logging.basicConfig(
@@ -64,6 +73,155 @@ async def health_check():
         timestamp=datetime.utcnow().isoformat(),
         version="1.0.0"
     )
+
+
+@app.post("/initiate-channel-verification", response_model=InitiateChannelVerificationResponse, status_code=status.HTTP_200_OK)
+async def initiate_channel_verification(request: InitiateChannelVerificationRequest):
+    """
+    Step 1: Initiate channel verification.
+    - Generates 6-digit verification code
+    - Sends code to Teams channel
+    - Stores pending verification in Firestore
+    - Code expires in 15 minutes
+    """
+    try:
+        doc_id = f"{request.app_code}-{request.alert_type}"
+        
+        logger.info(f"Initiating channel verification: {doc_id}")
+        
+        # Generate verification code
+        verification_code = generate_verification_code()
+        
+        # Calculate expiration (15 minutes)
+        from datetime import timedelta
+        expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        
+        # Send verification code to Teams
+        logger.info(f"Sending verification code to Teams: {doc_id}")
+        sent = await send_verification_code_to_teams(
+            webhook_url=str(request.url),
+            verification_code=verification_code,
+            app_code=request.app_code,
+            alert_type=request.alert_type
+        )
+        
+        if not sent:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to send verification code to Teams. Please check the webhook URL."
+            )
+        
+        # Save pending verification
+        save_pending_verification(
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            url=str(request.url),
+            verification_code=verification_code,
+            updated_by=request.updated_by,
+            expires_at=expires_at
+        )
+        
+        logger.info(f"Verification code sent successfully: {doc_id}")
+        
+        return InitiateChannelVerificationResponse(
+            success=True,
+            message="Verification code sent to Teams channel. Please check the channel and enter the code.",
+            doc_id=doc_id,
+            verification_code=verification_code,
+            expires_at=expires_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error initiating channel verification: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initiate verification: {str(e)}"
+        )
+
+
+@app.post("/verify-channel", response_model=VerifyChannelResponse, status_code=status.HTTP_201_CREATED)
+async def verify_channel(request: VerifyChannelRequest):
+    """
+    Step 2: Verify channel with code.
+    - Validates verification code
+    - Checks expiration
+    - Stores webhook URL in Secret Manager
+    - Stores metadata in Firestore
+    - Deletes pending verification
+    """
+    try:
+        doc_id = f"{request.app_code}-{request.alert_type}"
+        
+        logger.info(f"Verifying channel: {doc_id}")
+        
+        # Get pending verification
+        pending = get_pending_verification(doc_id)
+        
+        if not pending:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No pending verification found for {doc_id}. Please initiate verification first."
+            )
+        
+        # Check expiration
+        expires_at = datetime.fromisoformat(pending["expires_at"])
+        if datetime.utcnow() > expires_at:
+            delete_pending_verification(doc_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verification code has expired. Please request a new code."
+            )
+        
+        # Validate verification code
+        if pending["verification_code"] != request.verification_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid verification code. Please try again."
+            )
+        
+        logger.info(f"Verification code validated: {doc_id}")
+        
+        # Store webhook URL in Secret Manager
+        secret_id = doc_id
+        secret_version = create_or_update_secret(secret_id, pending["url"])
+        
+        # Store metadata in Firestore
+        save_channel_metadata(
+            collection_name=config.FIRESTORE_COLLECTION,
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            secret_id=secret_id,
+            secret_version=secret_version,
+            updated_by=pending["updated_by"],
+            timestamp=request.timestamp
+        )
+        
+        # Delete pending verification
+        delete_pending_verification(doc_id)
+        
+        logger.info(f"Channel verified and registered successfully: {doc_id}")
+        
+        return VerifyChannelResponse(
+            success=True,
+            message="Channel verified and registered successfully",
+            doc_id=doc_id,
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            verified=True
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying channel: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to verify channel: {str(e)}"
+        )
 
 
 @app.post("/add-teams-channel", response_model=AddTeamsChannelResponse, status_code=status.HTTP_201_CREATED)

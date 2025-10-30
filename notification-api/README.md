@@ -70,9 +70,109 @@ Post a simple text message (query parameters).
 curl -X POST "http://localhost:8080/post-simple-message?webhook_url=https://outlook.office.com/webhook/...&message=Hello%20Teams"
 ```
 
-### POST /add-teams-channel
+### POST /initiate-channel-verification
 
-Register a Teams notification channel with secure webhook URL storage.
+**Step 1:** Initiate channel verification by sending a verification code to Teams.
+
+**Request Body:**
+```json
+{
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "url": "https://outlook.office.com/webhook/...",
+  "updated_by": "john.doe@company.com"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Verification code sent to Teams channel. Please check the channel and enter the code.",
+  "doc_id": "cost-alerts-budget-exceeded",
+  "verification_code": "123456",
+  "expires_at": "2025-10-30T12:15:00Z"
+}
+```
+
+**What happens:**
+1. Generates 6-digit verification code
+2. Sends code to Teams channel via webhook
+3. Stores pending verification in Firestore
+4. Code expires in 15 minutes
+
+**Teams Message:**
+```
+🔐 Channel Verification
+
+Please verify this Teams channel to enable notifications.
+
+App Code: cost-alerts
+Alert Type: budget-exceeded
+Verification Code: **123456**
+
+⚠️ This code expires in 15 minutes. Enter this code in the registration UI to complete setup.
+```
+
+### POST /verify-channel
+
+**Step 2:** Verify channel by submitting the verification code.
+
+**Request Body:**
+```json
+{
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "verification_code": "123456",
+  "timestamp": "2025-10-30T12:10:00Z"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Channel verified and registered successfully",
+  "doc_id": "cost-alerts-budget-exceeded",
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "verified": true
+}
+```
+
+**What happens:**
+1. Validates verification code
+2. Checks expiration (15 minutes)
+3. Stores webhook URL in Secret Manager
+4. Stores metadata in Firestore
+5. Deletes pending verification
+
+**Error Responses:**
+
+**Code Expired:**
+```json
+{
+  "detail": "Verification code has expired. Please request a new code."
+}
+```
+
+**Invalid Code:**
+```json
+{
+  "detail": "Invalid verification code. Please try again."
+}
+```
+
+**No Pending Verification:**
+```json
+{
+  "detail": "No pending verification found for cost-alerts-budget-exceeded. Please initiate verification first."
+}
+```
+
+### POST /add-teams-channel (Legacy - Direct Registration)
+
+Register a Teams notification channel with secure webhook URL storage (without verification).
 
 **Request Body:**
 ```json
@@ -420,13 +520,57 @@ gcloud run deploy notification-api \
 
 ## Usage Examples
 
-### Register Teams Channel
+### Register Teams Channel (Recommended - With Verification)
+
+```python
+import requests
+from datetime import datetime
+import time
+
+# Step 1: Initiate verification
+url = "http://localhost:8080/initiate-channel-verification"
+payload = {
+    "app_code": "cost-alerts",
+    "alert_type": "budget-exceeded",
+    "url": "https://outlook.office.com/webhook/...",
+    "updated_by": "admin@company.com"
+}
+
+response = requests.post(url, json=payload)
+result = response.json()
+print(f"Verification code sent: {result['verification_code']}")
+print(f"Expires at: {result['expires_at']}")
+
+# User checks Teams channel and gets the code
+# In production, this would come from UI input
+verification_code = input("Enter verification code from Teams: ")
+
+# Step 2: Verify channel with code
+verify_url = "http://localhost:8080/verify-channel"
+verify_payload = {
+    "app_code": "cost-alerts",
+    "alert_type": "budget-exceeded",
+    "verification_code": verification_code,
+    "timestamp": datetime.utcnow().isoformat() + "Z"
+}
+
+verify_response = requests.post(verify_url, json=verify_payload)
+print(verify_response.json())
+# Output: {
+#   "success": true,
+#   "message": "Channel verified and registered successfully",
+#   "doc_id": "cost-alerts-budget-exceeded",
+#   "verified": true
+# }
+```
+
+### Register Teams Channel (Legacy - Without Verification)
 
 ```python
 import requests
 from datetime import datetime
 
-# Register a Teams notification channel
+# Direct registration (no verification)
 url = "http://localhost:8080/add-teams-channel"
 payload = {
     "app_code": "cost-alerts",
@@ -438,13 +582,6 @@ payload = {
 
 response = requests.post(url, json=payload)
 print(response.json())
-# Output: {
-#   "success": true,
-#   "message": "Teams channel registered successfully",
-#   "doc_id": "cost-alerts-budget-exceeded",
-#   "app_code": "cost-alerts",
-#   "alert_type": "budget-exceeded"
-# }
 ```
 
 ### Post Message to Teams

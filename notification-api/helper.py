@@ -1,8 +1,10 @@
 """Helper functions for notification API"""
 
 import logging
-from typing import Dict, Any
-from datetime import datetime
+import random
+import string
+from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
 from google.cloud import firestore
 from google.cloud import secretmanager
 import httpx
@@ -80,6 +82,7 @@ def save_channel_metadata(
         "secret_version": secret_version,
         "updated_by": updated_by,
         "timestamp": timestamp,
+        "verified": True,
         "created_at": datetime.utcnow().isoformat(),
         "last_modified": datetime.utcnow().isoformat()
     }
@@ -87,6 +90,119 @@ def save_channel_metadata(
     doc_ref = db.collection(collection_name).document(doc_id)
     doc_ref.set(channel_data, merge=True)
     logger.info(f"Saved metadata to Firestore: {doc_id}")
+
+
+def save_pending_verification(
+    doc_id: str,
+    app_code: str,
+    alert_type: str,
+    url: str,
+    verification_code: str,
+    updated_by: str,
+    expires_at: str
+) -> None:
+    """Save pending verification to Firestore"""
+    verification_data = {
+        "app_code": app_code,
+        "alert_type": alert_type,
+        "url": url,
+        "verification_code": verification_code,
+        "updated_by": updated_by,
+        "expires_at": expires_at,
+        "verified": False,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "pending"
+    }
+    
+    collection_name = f"{config.FIRESTORE_COLLECTION}-pending"
+    doc_ref = db.collection(collection_name).document(doc_id)
+    doc_ref.set(verification_data)
+    logger.info(f"Saved pending verification to Firestore: {doc_id}")
+
+
+def get_pending_verification(doc_id: str) -> Optional[Dict[str, Any]]:
+    """Get pending verification from Firestore"""
+    collection_name = f"{config.FIRESTORE_COLLECTION}-pending"
+    doc_ref = db.collection(collection_name).document(doc_id)
+    doc = doc_ref.get()
+    
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def delete_pending_verification(doc_id: str) -> None:
+    """Delete pending verification from Firestore"""
+    collection_name = f"{config.FIRESTORE_COLLECTION}-pending"
+    doc_ref = db.collection(collection_name).document(doc_id)
+    doc_ref.delete()
+    logger.info(f"Deleted pending verification: {doc_id}")
+
+
+# Verification code functions
+def generate_verification_code() -> str:
+    """Generate a 6-digit verification code"""
+    return ''.join(random.choices(string.digits, k=6))
+
+
+async def send_verification_code_to_teams(webhook_url: str, verification_code: str, app_code: str, alert_type: str) -> bool:
+    """Send verification code to Teams channel"""
+    message_card = {
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "type": "AdaptiveCard",
+                "body": [
+                    {
+                        "type": "Container",
+                        "style": "accent",
+                        "items": [{
+                            "type": "TextBlock",
+                            "text": "🔐 Channel Verification",
+                            "weight": "bolder",
+                            "size": "large",
+                            "wrap": True
+                        }],
+                        "bleed": True
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "Please verify this Teams channel to enable notifications.",
+                        "wrap": True,
+                        "spacing": "medium"
+                    },
+                    {
+                        "type": "FactSet",
+                        "facts": [
+                            {"title": "App Code", "value": app_code},
+                            {"title": "Alert Type", "value": alert_type},
+                            {"title": "Verification Code", "value": f"**{verification_code}**"}
+                        ],
+                        "spacing": "medium"
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": "⚠️ This code expires in 15 minutes. Enter this code in the registration UI to complete setup.",
+                        "wrap": True,
+                        "spacing": "medium",
+                        "color": "warning",
+                        "size": "small"
+                    }
+                ],
+                "msteams": {"width": "Full"},
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.4"
+            }
+        }]
+    }
+    
+    try:
+        response = await post_to_teams_with_retry(webhook_url, message_card, max_retries=2)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to send verification code to Teams: {e}")
+        return False
 
 
 # Teams webhook functions
