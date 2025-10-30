@@ -1,6 +1,6 @@
 """FastAPI Notification API - Teams webhooks and Pub/Sub integration"""
 
-from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import FastAPI, HTTPException, status, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import HttpUrl
 import logging
@@ -34,8 +34,10 @@ from helper import (
     send_verification_code_to_teams,
     save_pending_verification,
     get_pending_verification,
-    delete_pending_verification
+    delete_pending_verification,
+    log_audit_event
 )
+from auth import get_current_user, get_current_user_info
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -80,18 +82,22 @@ async def health_check():
 
 
 @app.post("/initiate-channel-verification", response_model=InitiateChannelVerificationResponse, status_code=status.HTTP_200_OK)
-async def initiate_channel_verification(request: InitiateChannelVerificationRequest):
+async def initiate_channel_verification(
+    request: InitiateChannelVerificationRequest,
+    user_email: str = Depends(get_current_user)
+):
     """
     Step 1: Initiate channel verification.
     - Generates 6-digit verification code
     - Sends code to Teams channel
     - Stores pending verification in Firestore
     - Code expires in 15 minutes
+    - Requires authentication
     """
     try:
         doc_id = f"{request.app_code}-{request.alert_type}"
         
-        logger.info(f"Initiating channel verification: {doc_id}")
+        logger.info(f"Initiating channel verification: {doc_id} by {user_email}")
         
         # Generate verification code
         verification_code = generate_verification_code()
@@ -110,6 +116,16 @@ async def initiate_channel_verification(request: InitiateChannelVerificationRequ
         )
         
         if not sent:
+            # Log audit event - failed
+            log_audit_event(
+                event_type="channel_verification_initiated",
+                app_code=request.app_code,
+                alert_type=request.alert_type,
+                user_email=user_email,
+                action="initiate_verification",
+                status="failed",
+                details={"reason": "Failed to send verification code to Teams"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to send verification code to Teams. Please check the webhook URL."
@@ -122,8 +138,19 @@ async def initiate_channel_verification(request: InitiateChannelVerificationRequ
             alert_type=request.alert_type,
             url=str(request.url),
             verification_code=verification_code,
-            updated_by=request.updated_by,
+            updated_by=user_email,
             expires_at=expires_at
+        )
+        
+        # Log audit event - success
+        log_audit_event(
+            event_type="channel_verification_initiated",
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            user_email=user_email,
+            action="initiate_verification",
+            status="success",
+            details={"expires_at": expires_at}
         )
         
         logger.info(f"Verification code sent successfully: {doc_id}")
@@ -133,13 +160,24 @@ async def initiate_channel_verification(request: InitiateChannelVerificationRequ
             message="Verification code sent to Teams channel. Please check the channel and enter the code.",
             doc_id=doc_id,
             verification_code=verification_code,
-            expires_at=expires_at
+            expires_at=expires_at,
+            requested_by=user_email
         )
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error initiating channel verification: {e}", exc_info=True)
+        # Log audit event - error
+        log_audit_event(
+            event_type="channel_verification_initiated",
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            user_email=user_email,
+            action="initiate_verification",
+            status="error",
+            details={"error": str(e)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to initiate verification: {str(e)}"
@@ -147,7 +185,10 @@ async def initiate_channel_verification(request: InitiateChannelVerificationRequ
 
 
 @app.post("/verify-channel", response_model=VerifyChannelResponse, status_code=status.HTTP_201_CREATED)
-async def verify_channel(request: VerifyChannelRequest):
+async def verify_channel(
+    request: VerifyChannelRequest,
+    user_email: str = Depends(get_current_user)
+):
     """
     Step 2: Verify channel with code.
     - Validates verification code
@@ -155,16 +196,26 @@ async def verify_channel(request: VerifyChannelRequest):
     - Stores webhook URL in Secret Manager
     - Stores metadata in Firestore
     - Deletes pending verification
+    - Requires authentication
     """
     try:
         doc_id = f"{request.app_code}-{request.alert_type}"
         
-        logger.info(f"Verifying channel: {doc_id}")
+        logger.info(f"Verifying channel: {doc_id} by {user_email}")
         
         # Get pending verification
         pending = get_pending_verification(doc_id)
         
         if not pending:
+            log_audit_event(
+                event_type="channel_verified",
+                app_code=request.app_code,
+                alert_type=request.alert_type,
+                user_email=user_email,
+                action="verify_channel",
+                status="failed",
+                details={"reason": "No pending verification found"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No pending verification found for {doc_id}. Please initiate verification first."
@@ -174,6 +225,15 @@ async def verify_channel(request: VerifyChannelRequest):
         expires_at = datetime.fromisoformat(pending["expires_at"])
         if datetime.utcnow() > expires_at:
             delete_pending_verification(doc_id)
+            log_audit_event(
+                event_type="channel_verified",
+                app_code=request.app_code,
+                alert_type=request.alert_type,
+                user_email=user_email,
+                action="verify_channel",
+                status="failed",
+                details={"reason": "Verification code expired"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Verification code has expired. Please request a new code."
@@ -181,6 +241,15 @@ async def verify_channel(request: VerifyChannelRequest):
         
         # Validate verification code
         if pending["verification_code"] != request.verification_code:
+            log_audit_event(
+                event_type="channel_verified",
+                app_code=request.app_code,
+                alert_type=request.alert_type,
+                user_email=user_email,
+                action="verify_channel",
+                status="failed",
+                details={"reason": "Invalid verification code"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid verification code. Please try again."
@@ -207,6 +276,17 @@ async def verify_channel(request: VerifyChannelRequest):
         # Delete pending verification
         delete_pending_verification(doc_id)
         
+        # Log audit event - success
+        log_audit_event(
+            event_type="channel_created",
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            user_email=user_email,
+            action="create_channel",
+            status="success",
+            details={"secret_version": secret_version}
+        )
+        
         logger.info(f"Channel verified and registered successfully: {doc_id}")
         
         return VerifyChannelResponse(
@@ -215,7 +295,8 @@ async def verify_channel(request: VerifyChannelRequest):
             doc_id=doc_id,
             app_code=request.app_code,
             alert_type=request.alert_type,
-            verified=True
+            verified=True,
+            requested_by=pending["updated_by"]
         )
         
     except HTTPException:
@@ -229,30 +310,23 @@ async def verify_channel(request: VerifyChannelRequest):
 
 
 @app.post("/add-teams-channel", response_model=InitiateChannelVerificationResponse, status_code=status.HTTP_200_OK)
-async def add_teams_channel(request: AddTeamsChannelRequest):
+async def add_teams_channel(
+    request: AddTeamsChannelRequest,
+    user_email: str = Depends(get_current_user)
+):
     """
     Register a Teams notification channel (with verification).
-    
-    This endpoint now initiates the verification process.
-    Use /verify-channel to complete registration after receiving the code.
-    
-    Steps:
-    1. Calls this endpoint with webhook URL
-    2. Verification code sent to Teams channel
-    3. User enters code via /verify-channel
-    4. Channel registered after successful verification
     """
     try:
         # Convert to verification request
         verification_request = InitiateChannelVerificationRequest(
             app_code=request.app_code,
             alert_type=request.alert_type,
-            url=request.url,
-            updated_by=request.updated_by
+            url=request.url
         )
         
-        # Delegate to verification flow
-        return await initiate_channel_verification(verification_request)
+        # Delegate to verification flow (user_email passed via dependency)
+        return await initiate_channel_verification(verification_request, user_email)
         
     except Exception as e:
         logger.error(f"Error initiating channel registration: {e}", exc_info=True)
@@ -263,19 +337,18 @@ async def add_teams_channel(request: AddTeamsChannelRequest):
 
 
 @app.delete("/delete-teams-channel", response_model=DeleteChannelResponse, status_code=status.HTTP_200_OK)
-async def delete_teams_channel(request: DeleteChannelRequest):
+async def delete_teams_channel(
+    request: DeleteChannelRequest,
+    user_email: str = Depends(get_current_user)
+):
     """
     Delete a Teams notification channel.
-    - Deletes webhook URL from Secret Manager
-    - Deletes metadata from Firestore
-    - Document ID: {app_code}-{alert_type}
-    - Secret ID: {app_code}-{alert_type}
     """
     try:
         doc_id = f"{request.app_code}-{request.alert_type}"
         secret_id = doc_id
         
-        logger.info(f"Deleting Teams channel: {doc_id}")
+        logger.info(f"Deleting Teams channel: {doc_id} by {user_email}")
         
         # Delete from Firestore
         deleted_firestore = delete_channel_metadata(doc_id)
@@ -284,27 +357,60 @@ async def delete_teams_channel(request: DeleteChannelRequest):
         deleted_secret = delete_secret(secret_id)
         
         if not deleted_firestore and not deleted_secret:
+            log_audit_event(
+                event_type="channel_deleted",
+                app_code=request.app_code,
+                alert_type=request.alert_type,
+                user_email=user_email,
+                action="delete_channel",
+                status="failed",
+                details={"reason": "Channel not found"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Channel not found: {doc_id}"
             )
         
+        # Log audit event - success
+        log_audit_event(
+            event_type="channel_deleted",
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            user_email=user_email,
+            action="delete_channel",
+            status="success",
+            details={
+                "deleted_from_firestore": deleted_firestore,
+                "deleted_from_secret_manager": deleted_secret
+            }
+        )
+        
         logger.info(f"Successfully deleted channel: {doc_id} (Firestore: {deleted_firestore}, Secret: {deleted_secret})")
         
         return DeleteChannelResponse(
             success=True,
-            message=f"Channel deleted successfully",
+            message="Channel deleted successfully",
             doc_id=doc_id,
             app_code=request.app_code,
             alert_type=request.alert_type,
             deleted_from_firestore=deleted_firestore,
-            deleted_from_secret_manager=deleted_secret
+            deleted_from_secret_manager=deleted_secret,
+            requested_by=user_email
         )
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting Teams channel: {e}", exc_info=True)
+        log_audit_event(
+            event_type="channel_deleted",
+            app_code=request.app_code,
+            alert_type=request.alert_type,
+            user_email=user_email,
+            action="delete_channel",
+            status="error",
+            details={"error": str(e)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete Teams channel: {str(e)}"

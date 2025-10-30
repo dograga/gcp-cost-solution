@@ -171,6 +171,39 @@ def delete_channel_metadata(doc_id: str) -> bool:
         return False
 
 
+# Audit logging functions
+def log_audit_event(
+    event_type: str,
+    app_code: str,
+    alert_type: str,
+    user_email: str,
+    action: str,
+    status: str,
+    details: Optional[Dict[str, Any]] = None
+) -> None:
+    """Log audit event to Firestore"""
+    try:
+        audit_data = {
+            "event_type": event_type,
+            "app_code": app_code,
+            "alert_type": alert_type,
+            "doc_id": f"{app_code}-{alert_type}",
+            "user_email": user_email,
+            "action": action,
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "details": details or {}
+        }
+        
+        # Add to audit collection
+        db.collection(config.AUDIT_COLLECTION).add(audit_data)
+        logger.info(f"Audit event logged: {event_type} by {user_email}")
+        
+    except Exception as e:
+        logger.error(f"Error logging audit event: {e}")
+        # Don't raise - audit logging should not break main flow
+
+
 # Verification code functions
 def generate_verification_code() -> str:
     """Generate a 6-digit verification code"""

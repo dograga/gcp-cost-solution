@@ -126,7 +126,6 @@ class InitiateChannelVerificationRequest(BaseModel):
     app_code: str = Field(..., min_length=1, max_length=100, description="Application code")
     alert_type: str = Field(..., min_length=1, max_length=100, description="Alert type")
     url: HttpUrl = Field(..., description="Teams webhook URL to verify")
-    updated_by: str = Field(..., min_length=1, max_length=100, description="User who is registering")
     
     @field_validator('app_code', 'alert_type')
     @classmethod
@@ -144,6 +143,7 @@ class InitiateChannelVerificationResponse(BaseModel):
     doc_id: str
     verification_code: str
     expires_at: str
+    requested_by: str
 
 
 class VerifyChannelRequest(BaseModel):
@@ -162,6 +162,7 @@ class VerifyChannelResponse(BaseModel):
     app_code: str
     alert_type: str
     verified: bool
+    requested_by: str
 
 
 class DeleteChannelRequest(BaseModel):
@@ -179,3 +180,4 @@ class DeleteChannelResponse(BaseModel):
     alert_type: str
     deleted_from_firestore: bool
     deleted_from_secret_manager: bool
+    requested_by: str
