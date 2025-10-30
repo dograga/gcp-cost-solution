@@ -147,6 +147,11 @@ Register a Teams notification channel with secure webhook URL storage.
 
 Pub/Sub push subscription endpoint for event-driven notifications.
 
+**How it works:**
+1. Receives `app_code` and `alert_type` in payload
+2. Retrieves webhook URL from Secret Manager using `{app_code}-{alert_type}`
+3. Posts message to Teams webhook
+
 **Pub/Sub Message Format:**
 ```json
 {
@@ -162,8 +167,9 @@ Pub/Sub push subscription endpoint for event-driven notifications.
 **Decoded Payload (base64):**
 ```json
 {
-  "webhook_url": "https://outlook.office.com/webhook/...",
-  "message": "Cost alert: Budget exceeded",
+  "app_code": "cost-alerts",
+  "alert_type": "budget-exceeded",
+  "message": "Cost alert: Budget exceeded by 25%",
   "title": "⚠️ Cost Alert",
   "color": "FF0000",
   "facts": {
@@ -178,9 +184,21 @@ Pub/Sub push subscription endpoint for event-driven notifications.
 ```json
 {
   "status": "processed",
-  "success": true
+  "success": true,
+  "secret_id": "cost-alerts-budget-exceeded"
 }
 ```
+
+**Error Response (Channel not registered):**
+```json
+{
+  "detail": "Webhook URL not found for cost-alerts-budget-exceeded. Please register the channel first."
+}
+```
+
+**Prerequisites:**
+- Channel must be registered first using `/add-teams-channel`
+- Secret Manager must contain webhook URL with ID `{app_code}-{alert_type}`
 
 ### GET /health
 
@@ -235,14 +253,14 @@ gcloud pubsub topics publish teams-notifications \
 ```python
 from google.cloud import pubsub_v1
 import json
-import base64
 
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path('my-project', 'teams-notifications')
 
-# Create notification payload
+# Create notification payload (no webhook URL needed)
 payload = {
-    "webhook_url": "https://outlook.office.com/webhook/...",
+    "app_code": "cost-alerts",
+    "alert_type": "budget-exceeded",
     "message": "Cost alert: Budget exceeded by 25%",
     "title": "⚠️ Cost Alert",
     "color": "FF0000",
@@ -254,12 +272,13 @@ payload = {
     }
 }
 
-# Encode as base64
+# Publish (Pub/Sub will base64 encode automatically)
 data = json.dumps(payload).encode('utf-8')
-
-# Publish
 future = publisher.publish(topic_path, data)
 print(f"Published message ID: {future.result()}")
+
+# Note: The channel must be registered first:
+# POST /add-teams-channel with app_code="cost-alerts" and alert_type="budget-exceeded"
 ```
 
 ## Configuration

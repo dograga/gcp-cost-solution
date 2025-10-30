@@ -61,8 +61,9 @@ class PubSubMessage(BaseModel):
 
 class PubSubNotification(BaseModel):
     """Notification payload from Pub/Sub (decoded)"""
-    webhook_url: str
-    message: str
+    app_code: str = Field(..., min_length=1, max_length=100)
+    alert_type: str = Field(..., min_length=1, max_length=100)
+    message: str = Field(..., min_length=1)
     title: Optional[str] = None
     color: Optional[str] = Field(default=TeamsColor.INFO)
     facts: Optional[Dict[str, str]] = None

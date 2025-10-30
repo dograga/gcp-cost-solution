@@ -188,9 +188,12 @@ async def pubsub_notification(request: Request):
     """
     Pub/Sub push subscription endpoint for Teams notifications.
     
+    Retrieves webhook URL from Secret Manager using app_code and alert_type.
+    
     Expects Pub/Sub message with base64-encoded JSON payload:
     {
-        "webhook_url": "https://outlook.office.com/webhook/...",
+        "app_code": "cost-alerts",
+        "alert_type": "budget-exceeded",
         "message": "Alert message",
         "title": "Alert Title",
         "color": "FF0000",
@@ -215,15 +218,30 @@ async def pubsub_notification(request: Request):
         logger.info(f"Received Pub/Sub notification: {payload.get('title', 'No title')}")
         
         # Validate required fields
-        if "webhook_url" not in payload or "message" not in payload:
+        if "app_code" not in payload or "alert_type" not in payload or "message" not in payload:
             raise HTTPException(
                 status_code=400,
-                detail="Payload must contain webhook_url and message"
+                detail="Payload must contain app_code, alert_type, and message"
+            )
+        
+        # Get secret ID from app_code and alert_type
+        secret_id = f"{payload['app_code']}-{payload['alert_type']}"
+        
+        logger.info(f"Retrieving webhook URL from Secret Manager: {secret_id}")
+        
+        # Get webhook URL from Secret Manager
+        try:
+            webhook_url = get_secret(secret_id)
+        except Exception as e:
+            logger.error(f"Failed to retrieve webhook URL for {secret_id}: {e}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Webhook URL not found for {secret_id}. Please register the channel first."
             )
         
         # Create Teams message request
         teams_request = TeamsMessageRequest(
-            webhook_url=payload["webhook_url"],
+            webhook_url=webhook_url,
             message=payload["message"],
             title=payload.get("title"),
             color=payload.get("color", "0078D4"),
@@ -233,12 +251,14 @@ async def pubsub_notification(request: Request):
         # Post to Teams
         response = await post_to_teams_channel(teams_request)
         
-        # Return 204 No Content for Pub/Sub acknowledgment
-        return {"status": "processed", "success": response.success}
+        return {"status": "processed", "success": response.success, "secret_id": secret_id}
         
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in Pub/Sub message: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    
+    except HTTPException:
+        raise
     
     except Exception as e:
         logger.error(f"Error processing Pub/Sub message: {e}", exc_info=True)
