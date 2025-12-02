@@ -25,15 +25,22 @@ class CAIClient:
         self.scope = f"{scope_type}/{scope_id}"
         logger.info(f"Initialized CAI client for scope: {self.scope}")
     
-    async def search_organization_policies(self) -> AsyncIterator[Dict[str, Any]]:
+    async def search_security_controls(self) -> AsyncIterator[Dict[str, Any]]:
         """
-        Search for Organization Policies across the entire hierarchy.
+        Search for security controls (Org Policies, VPC-SC, Network, IAM) across the hierarchy.
         
         Yields:
-            Dictionary containing policy data
+            Dictionary containing asset data
         """
-        # Asset type for Organization Policies
-        asset_types = ["orgpolicy.googleapis.com/Policy"]
+        # Asset types for Security Controls
+        asset_types = [
+            "orgpolicy.googleapis.com/Policy",
+            "accesscontextmanager.googleapis.com/AccessLevel",
+            "accesscontextmanager.googleapis.com/ServicePerimeter",
+            "compute.googleapis.com/Firewall",
+            "compute.googleapis.com/SecurityPolicy", # Cloud Armor
+            "iam.googleapis.com/Role"
+        ]
         
         # Search all resources in the scope
         request = asset_v1.SearchAllResourcesRequest(

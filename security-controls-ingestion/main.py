@@ -7,6 +7,7 @@ from datetime import datetime
 from firestore_datastore import Datastore
 from ingestion_service import IngestionService
 from cai_client import CAIClient
+from scc_management_client import SCCManagementClient
 from config import get_settings
 
 # Initialize settings
@@ -41,8 +42,11 @@ async def main():
         # Create CAI client
         cai_client = CAIClient()
         
+        # Create SCC Management client
+        scc_client = SCCManagementClient()
+        
         # Create ingestion service
-        service = IngestionService(datastore, cai_client)
+        service = IngestionService(datastore, cai_client, scc_client)
         
         # Run ingestion
         stats = await service.ingest_controls()
