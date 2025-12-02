@@ -7,11 +7,14 @@ from datetime import datetime
 from firestore_datastore import Datastore
 from ingestion_service import IngestionService
 from cai_client import CAIClient
-import config
+from config import get_settings
+
+# Initialize settings
+settings = get_settings()
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -24,7 +27,8 @@ async def main():
     """Main execution function"""
     start_time = datetime.now()
     logger.info("=" * 80)
-    logger.info("Security Controls Ingestion Job Started")
+    logger.info(f"{settings.app_name} Started")
+    logger.info(f"Environment: {settings.app_env}")
     logger.info(f"Start Time: {start_time.isoformat()}")
     logger.info("=" * 80)
     
@@ -48,7 +52,7 @@ async def main():
         duration = (end_time - start_time).total_seconds()
         
         logger.info("=" * 80)
-        logger.info("Security Controls Ingestion Job Completed")
+        logger.info(f"{settings.app_name} Completed")
         logger.info(f"End Time: {end_time.isoformat()}")
         logger.info(f"Duration: {duration:.2f} seconds")
         logger.info(f"Controls Loaded: {stats['total_loaded']}")

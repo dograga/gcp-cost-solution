@@ -3,7 +3,7 @@
 from typing import List, Dict, Any
 import logging
 from google.cloud import firestore
-import config
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,15 +11,19 @@ class Datastore:
     """Firestore implementation for Security Controls"""
     
     def __init__(self):
-        db_name = config.FIRESTORE_DB
-        if db_name == '(default)':
-            self.db = firestore.Client(project=config.GCP_PROJECT_ID)
-        else:
-            self.db = firestore.Client(project=config.GCP_PROJECT_ID, database=db_name)
+        self.settings = get_settings()
+        db_name = self.settings.firestore_database
+        project_id = self.settings.gcp_project_id
         
-        self.collection = config.FIRESTORE_COLLECTION_CONTROLS
+        if db_name == '(default)':
+            self.db = firestore.Client(project=project_id)
+        else:
+            self.db = firestore.Client(project=project_id, database=db_name)
+        
+        self.collection = self.settings.firestore_collection_controls
         
         logger.info(f"Initialized Firestore datastore:")
+        logger.info(f"  Project: {project_id}")
         logger.info(f"  DB: {db_name}, Collection: {self.collection}")
     
     async def upsert_controls(self, controls: List[Dict[str, Any]]) -> int:
@@ -58,5 +62,4 @@ class Datastore:
     
     async def close(self):
         """Close Firestore connections"""
-        # Firestore client doesn't require explicit closing usually, but good practice if needed
         pass
