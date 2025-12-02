@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     firestore_database: str = "(default)"
     
     # Collection names
-    firestore_collection_controls: str = "security-controls"
+    # Collection names
+    firestore_collection_preventive: str = "security-controls-preventive"
+    firestore_collection_detective: str = "security-controls-detective"
     
     # Ingestion Scope Settings
     # Scope Type: "organization" or "folder"

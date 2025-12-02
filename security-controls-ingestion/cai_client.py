@@ -35,8 +35,8 @@ class CAIClient:
         # Asset types for Security Controls
         asset_types = [
             "orgpolicy.googleapis.com/Policy",
-            "accesscontextmanager.googleapis.com/AccessLevel",
-            "accesscontextmanager.googleapis.com/ServicePerimeter",
+            "identity.accesscontextmanager.googleapis.com/AccessLevel",
+            "identity.accesscontextmanager.googleapis.com/ServicePerimeter",
             "compute.googleapis.com/Firewall",
             "compute.googleapis.com/SecurityPolicy", # Cloud Armor
             "iam.googleapis.com/Role"

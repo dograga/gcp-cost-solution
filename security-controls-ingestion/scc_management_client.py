@@ -48,10 +48,20 @@ class SCCManagementClient:
                 count += 1
                 
                 # Extract relevant data
+                # CustomConfig is a protobuf message, need to access attributes directly
+                custom_config_data = {}
+                if module.custom_config:
+                    custom_config_data = {
+                        "severity": module.custom_config.severity.name if hasattr(module.custom_config.severity, 'name') else str(module.custom_config.severity),
+                        "description": module.custom_config.description,
+                        "recommendation": module.custom_config.recommendation,
+                        "predicate": str(module.custom_config.predicate)
+                    }
+
                 module_data = {
                     "name": module.name,
                     "display_name": module.display_name,
-                    "custom_config": module.custom_config,
+                    "custom_config": custom_config_data,
                     "enablement_state": module.enablement_state.name,
                     "type": "sha_custom_module"
                 }

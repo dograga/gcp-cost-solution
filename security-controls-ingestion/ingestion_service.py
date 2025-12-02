@@ -23,7 +23,8 @@ class IngestionService:
         """
         logger.info("Starting security controls ingestion...")
         
-        controls = []
+        preventive_controls = []
+        detective_controls = []
         
         # 1. Fetch Security Controls from CAI (Org Policies, VPC-SC, Network, IAM)
         logger.info("Fetching Security Controls from CAI...")
@@ -35,16 +36,17 @@ class IngestionService:
                 category = "Unknown"
                 control_type = "unknown"
                 description = f"Security Control: {asset['display_name']}"
+                is_preventive = True # Default for CAI assets
                 
                 if asset_type == "orgpolicy.googleapis.com/Policy":
                     category = "Organization Policy"
                     control_type = "organization_policy"
                     description = f"Organization Policy: {asset['display_name']}"
-                elif asset_type == "accesscontextmanager.googleapis.com/AccessLevel":
+                elif asset_type == "identity.accesscontextmanager.googleapis.com/AccessLevel":
                     category = "VPC Service Controls"
                     control_type = "access_level"
                     description = f"Access Level: {asset['display_name']}"
-                elif asset_type == "accesscontextmanager.googleapis.com/ServicePerimeter":
+                elif asset_type == "identity.accesscontextmanager.googleapis.com/ServicePerimeter":
                     category = "VPC Service Controls"
                     control_type = "service_perimeter"
                     description = f"Service Perimeter: {asset['display_name']}"
@@ -71,11 +73,16 @@ class IngestionService:
                     "source_data": asset,
                     "type": control_type
                 }
-                controls.append(control)
+                
+                if is_preventive:
+                    preventive_controls.append(control)
+                else:
+                    detective_controls.append(control)
+                    
         except Exception as e:
             logger.error(f"Failed to fetch Security Controls from CAI: {e}")
 
-        # 2. Fetch Effective SHA Custom Modules from SCC
+        # 2. Fetch Effective SHA Custom Modules from SCC (Detective)
         logger.info("Fetching Effective SHA Custom Modules from SCC...")
         try:
             async for module in self.scc_client.list_effective_sha_custom_modules():
@@ -89,21 +96,32 @@ class IngestionService:
                     "source_data": module,
                     "type": "sha_custom_module"
                 }
-                controls.append(control)
+                detective_controls.append(control)
         except Exception as e:
             logger.error(f"Failed to fetch SHA Custom Modules: {e}")
         
-        # 3. Add Built-in SHA Detectors (Static)
-        # Note: There is no API to list built-in detectors as resources.
-        # We use the static list to ensure coverage of standard Google controls.
+        # 3. Add Built-in SHA Detectors (Static) - Detective
         logger.info("Adding built-in Security Health Analytics detectors (Static Definitions)...")
-        controls.extend(SHA_DETECTORS)
+        detective_controls.extend(SHA_DETECTORS)
         
-        logger.info(f"Total controls to ingest: {len(controls)}")
+        logger.info(f"Total Preventive Controls: {len(preventive_controls)}")
+        logger.info(f"Total Detective Controls: {len(detective_controls)}")
         
-        upserted_count = await self.datastore.upsert_controls(controls)
+        # Upsert Preventive Controls
+        upserted_preventive = await self.datastore.upsert_controls(
+            preventive_controls, 
+            self.datastore.preventive_collection
+        )
+        
+        # Upsert Detective Controls
+        upserted_detective = await self.datastore.upsert_controls(
+            detective_controls, 
+            self.datastore.detective_collection
+        )
         
         return {
-            "total_loaded": len(controls),
-            "total_upserted": upserted_count
+            "total_loaded": len(preventive_controls) + len(detective_controls),
+            "total_upserted": upserted_preventive + upserted_detective,
+            "preventive_upserted": upserted_preventive,
+            "detective_upserted": upserted_detective
         }

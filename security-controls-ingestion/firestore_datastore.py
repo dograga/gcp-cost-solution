@@ -20,13 +20,17 @@ class Datastore:
         else:
             self.db = firestore.Client(project=project_id, database=db_name)
         
-        self.collection = self.settings.firestore_collection_controls
+        # Default collections from settings
+        self.preventive_collection = self.settings.firestore_collection_preventive
+        self.detective_collection = self.settings.firestore_collection_detective
         
         logger.info(f"Initialized Firestore datastore:")
         logger.info(f"  Project: {project_id}")
-        logger.info(f"  DB: {db_name}, Collection: {self.collection}")
+        logger.info(f"  DB: {db_name}")
+        logger.info(f"  Preventive Collection: {self.preventive_collection}")
+        logger.info(f"  Detective Collection: {self.detective_collection}")
     
-    async def upsert_controls(self, controls: List[Dict[str, Any]]) -> int:
+    async def upsert_controls(self, controls: List[Dict[str, Any]], collection_name: str) -> int:
         """
         Insert controls using Firestore batch operations.
         Using 'id' as document ID.
@@ -47,13 +51,13 @@ class Datastore:
                     logger.warning(f"Skipping control without id: {control}")
                     continue
                 
-                doc_ref = self.db.collection(self.collection).document(control_id)
+                doc_ref = self.db.collection(collection_name).document(control_id)
                 batch.set(doc_ref, control)
                 total_upserted += 1
             
             try:
                 batch.commit()
-                logger.info(f"Committed batch of {len(batch_controls)} controls")
+                logger.info(f"Committed batch of {len(batch_controls)} controls to {collection_name}")
             except Exception as e:
                 logger.error(f"Error committing batch: {e}")
                 raise
