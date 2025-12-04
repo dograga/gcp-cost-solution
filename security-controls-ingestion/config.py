@@ -18,11 +18,9 @@ class Settings(BaseSettings):
     
     # Collection names
     # Collection names
-    firestore_collection_org_preventive: str = "security-controls-org-preventive"
-    firestore_collection_project_preventive: str = "security-controls-project-preventive"
-    firestore_collection_org_detective: str = "security-controls-org-detective"
-    firestore_collection_project_detective: str = "security-controls-project-detective"
-    firestore_collection_firewall: str = "security-controls-firewall"
+    firestore_collection_controls: str = "controls"
+    firestore_collection_firewall_rules: str = "firewall_rules"
+    firestore_collection_iam_roles: str = "iam_roles"
     
     # Ingestion Scope Settings
     # Scope Type: "organization" or "folder"

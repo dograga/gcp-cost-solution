@@ -21,20 +21,16 @@ class Datastore:
             self.db = firestore.Client(project=project_id, database=db_name)
         
         # Default collections from settings
-        self.org_preventive_collection = self.settings.firestore_collection_org_preventive
-        self.project_preventive_collection = self.settings.firestore_collection_project_preventive
-        self.org_detective_collection = self.settings.firestore_collection_org_detective
-        self.project_detective_collection = self.settings.firestore_collection_project_detective
-        self.firewall_collection = self.settings.firestore_collection_firewall
+        self.controls_collection = self.settings.firestore_collection_controls
+        self.firewall_rules_collection = self.settings.firestore_collection_firewall_rules
+        self.iam_roles_collection = self.settings.firestore_collection_iam_roles
         
         logger.info(f"Initialized Firestore datastore:")
         logger.info(f"  Project: {project_id}")
         logger.info(f"  DB: {db_name}")
-        logger.info(f"  Org Preventive: {self.org_preventive_collection}")
-        logger.info(f"  Project Preventive: {self.project_preventive_collection}")
-        logger.info(f"  Org Detective: {self.org_detective_collection}")
-        logger.info(f"  Project Detective: {self.project_detective_collection}")
-        logger.info(f"  Firewall: {self.firewall_collection}")
+        logger.info(f"  Controls Collection: {self.controls_collection}")
+        logger.info(f"  Firewall Rules Collection: {self.firewall_rules_collection}")
+        logger.info(f"  IAM Roles Collection: {self.iam_roles_collection}")
     
     async def upsert_controls(self, controls: List[Dict[str, Any]], collection_name: str) -> int:
         """
@@ -52,9 +48,9 @@ class Datastore:
             batch = self.db.batch()
             
             for control in batch_controls:
-                control_id = control.get('id')
+                control_id = control.get('control_id')
                 if not control_id:
-                    logger.warning(f"Skipping control without id: {control}")
+                    logger.warning(f"Skipping control without control_id: {control}")
                     continue
                 
                 doc_ref = self.db.collection(collection_name).document(control_id)

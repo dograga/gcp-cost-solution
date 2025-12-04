@@ -23,191 +23,160 @@ class IngestionService:
         """
         logger.info("Starting security controls ingestion...")
         
-        org_preventive_controls = []
-        project_preventive_controls = []
-        org_detective_controls = []
-        project_detective_controls = []
-        firewall_controls = []
-        
-        # Aggregation dictionaries for project-level controls
-        # Key: {control_type}_{display_name}
-        # Value: Control dict
-        aggregated_project_controls = {}
+        controls_list = []
+        firewall_rules_list = []
+        iam_roles_list = []
         
         # 1. Fetch Security Controls from CAI (Org Policies, VPC-SC, Network, IAM)
         logger.info("Fetching Security Controls from CAI...")
         try:
             async for asset in self.cai_client.search_security_controls():
                 asset_type = asset['asset_type']
+                asset_name = asset.get('name', '')
+                display_name = asset.get('display_name', 'Unknown')
                 
-                # Determine category and type based on asset_type
-                category = "Unknown"
-                control_type = "unknown"
-                description = f"Security Control: {asset['display_name']}"
-                is_preventive = True # Default for CAI assets
-                is_firewall = False
+                # Determine enforcement level based on asset name prefix
+                enforcement_level = "resource" # Default
+                if asset_name.startswith("//cloudresourcemanager.googleapis.com/organizations/") or "/organizations/" in asset_name:
+                    enforcement_level = "org"
+                elif asset_name.startswith("//cloudresourcemanager.googleapis.com/folders/") or "/folders/" in asset_name:
+                    enforcement_level = "folder"
+                elif asset_name.startswith("//cloudresourcemanager.googleapis.com/projects/") or "/projects/" in asset_name:
+                    enforcement_level = "project"
+                
+                # Determine category, service, and collection
+                category = "preventive" # Default for CAI
+                service = "Unknown"
+                target_list = controls_list # Default collection
                 
                 if asset_type == "orgpolicy.googleapis.com/Policy":
-                    category = "Organization Policy"
-                    control_type = "organization_policy"
-                    description = f"Organization Policy: {asset['display_name']}"
+                    service = "Organization Policy"
+                    description = f"Organization Policy: {display_name}"
                 elif asset_type == "identity.accesscontextmanager.googleapis.com/AccessLevel":
-                    category = "VPC Service Controls"
-                    control_type = "access_level"
-                    description = f"Access Level: {asset['display_name']}"
+                    service = "VPC Service Controls"
+                    description = f"Access Level: {display_name}"
+                    
+                    # Determine scope based on project/folders fields
+                    if asset.get('project'):
+                        enforcement_level = "project"
+                    elif asset.get('folders'):
+                        enforcement_level = "folder"
+                    else:
+                        enforcement_level = "org"
+                        
                 elif asset_type == "identity.accesscontextmanager.googleapis.com/ServicePerimeter":
-                    category = "VPC Service Controls"
-                    control_type = "service_perimeter"
-                    description = f"Service Perimeter: {asset['display_name']}"
+                    service = "VPC Service Controls"
+                    description = f"Service Perimeter: {display_name}"
+                    
+                    # Determine scope based on project/folders fields
+                    if asset.get('project'):
+                        enforcement_level = "project"
+                    elif asset.get('folders'):
+                        enforcement_level = "folder"
+                    else:
+                        enforcement_level = "org"
                 elif asset_type == "compute.googleapis.com/Firewall":
-                    category = "Network Security"
-                    control_type = "firewall_rule"
-                    description = f"Firewall Rule: {asset['display_name']}"
-                    is_firewall = True
+                    service = "VPC Firewall"
+                    description = f"Firewall Rule: {display_name}"
+                    target_list = firewall_rules_list
                 elif asset_type == "compute.googleapis.com/SecurityPolicy":
-                    category = "Network Security"
-                    control_type = "cloud_armor_policy"
-                    description = f"Cloud Armor Policy: {asset['display_name']}"
+                    service = "Cloud Armor"
+                    description = f"Cloud Armor Policy: {display_name}"
                 elif asset_type == "iam.googleapis.com/Role":
-                    category = "Identity & Access"
-                    control_type = "iam_role"
-                    description = f"IAM Role: {asset['display_name']}"
+                    service = "IAM"
+                    description = f"IAM Role: {display_name}"
+                    target_list = iam_roles_list
+                else:
+                    description = f"Security Control: {display_name}"
 
-                # Check if it's a project-level control
-                project_id = asset.get('project')
-                if project_id:
-                     # Clean project ID (remove 'projects/' prefix if present)
-                    project_id = project_id.replace('projects/', '')
-                    
-                    # Create a unique key for aggregation
-                    # We group by control type and display name (assuming standard naming)
-                    agg_key = f"{control_type}_{asset['display_name']}"
-                    
-                    if agg_key in aggregated_project_controls:
-                        # Update existing entry
-                        aggregated_project_controls[agg_key]['projects'].append(project_id)
-                    else:
-                        # Create new entry
-                        control = {
-                            "id": agg_key, # Use aggregation key as ID
-                            "title": asset['display_name'],
-                            "description": description,
-                            "category": category,
-                            "severity": "HIGH", 
-                            "remediation": "Review control configuration",
-                            "source_data": asset, # Store first occurrence as representative
-                            "type": control_type,
-                            "projects": [project_id],
-                            "is_aggregated": True,
-                            "is_firewall": is_firewall, # Helper flag for sorting later
-                            "is_preventive": is_preventive # Helper flag
-                        }
-                        aggregated_project_controls[agg_key] = control
-                else:
-                    # Non-project level (Org/Folder), treat as individual
-                    control = {
-                        "id": asset['name'].replace('/', '_'),
-                        "title": asset['display_name'],
-                        "description": description,
-                        "category": category,
-                        "severity": "HIGH", 
-                        "remediation": "Review control configuration",
-                        "source_data": asset,
-                        "type": control_type
-                    }
-                    
-                    if is_firewall:
-                        firewall_controls.append(control)
-                    elif is_preventive:
-                        org_preventive_controls.append(control)
-                    else:
-                        org_detective_controls.append(control)
-            
-            # Process aggregated controls and add to respective lists
-            for key, control in aggregated_project_controls.items():
-                # Remove helper flags
-                is_fw = control.pop('is_firewall')
-                is_prev = control.pop('is_preventive')
+                # Map to new schema
+                control = {
+                    "control_id": asset_name.replace('/', '_'),
+                    "name": display_name,
+                    "description": description,
+                    "category": category,
+                    "enforcement_level": enforcement_level,
+                    "service": service,
+                    "compliance_frameworks": [], # Placeholder
+                    "created_at": "2025-12-04T12:00:00Z", # Should use actual timestamp in prod
+                    "source_data": asset
+                }
                 
-                if is_fw:
-                    firewall_controls.append(control)
-                elif is_prev:
-                    project_preventive_controls.append(control)
-                else:
-                    project_detective_controls.append(control)
+                target_list.append(control)
                     
         except Exception as e:
             logger.error(f"Failed to fetch Security Controls from CAI: {e}")
 
         # 2. Fetch Effective SHA Custom Modules from SCC (Detective)
-        # These are usually Org/Folder level definitions, but can be project level.
-        # For simplicity, if it has a project parent, we could aggregate.
-        # But list_effective... usually returns modules effective at the scope.
-        # Let's assume they are Org Detective for now unless we parse parent.
         logger.info("Fetching Effective SHA Custom Modules from SCC...")
         try:
             async for module in self.scc_client.list_effective_sha_custom_modules():
+                # Determine enforcement level (usually org/folder for modules, but check parent)
+                # module['name'] format: organizations/123/securityHealthAnalyticsSettings/customModules/456
+                enforcement_level = "org"
+                if "folders/" in module['name']:
+                    enforcement_level = "folder"
+                elif "projects/" in module['name']:
+                    enforcement_level = "project"
+
                 control = {
-                    "id": module['name'].replace('/', '_'),
-                    "title": module['display_name'],
+                    "control_id": module['name'].replace('/', '_'),
+                    "name": module['display_name'],
                     "description": f"SHA Custom Module: {module['display_name']}",
-                    "category": "Security Health Analytics",
-                    "severity": module['custom_config'].get('severity', 'MEDIUM'),
-                    "remediation": module['custom_config'].get('recommendation', 'Review custom module configuration'),
-                    "source_data": module,
-                    "type": "sha_custom_module"
+                    "category": "detective",
+                    "enforcement_level": enforcement_level,
+                    "service": "Security Command Center",
+                    "compliance_frameworks": [],
+                    "created_at": "2025-12-04T12:00:00Z",
+                    "source_data": module
                 }
-                org_detective_controls.append(control)
+                controls_list.append(control)
         except Exception as e:
             logger.error(f"Failed to fetch SHA Custom Modules: {e}")
         
         # 3. Add Built-in SHA Detectors (Static) - Detective
-        # These are generic definitions, so Org Detective fits best.
         logger.info("Adding built-in Security Health Analytics detectors (Static Definitions)...")
-        org_detective_controls.extend(SHA_DETECTORS)
+        for detector in SHA_DETECTORS:
+             # SHA Detectors are generic definitions, usually Org level applicability
+            control = {
+                "control_id": detector['id'],
+                "name": detector['title'],
+                "description": detector['description'],
+                "category": "detective",
+                "enforcement_level": "org", # Generic definition
+                "service": "Security Command Center",
+                "compliance_frameworks": [],
+                "created_at": "2025-12-04T12:00:00Z",
+                "source_data": detector
+            }
+            controls_list.append(control)
         
-        logger.info(f"Total Org Preventive Controls: {len(org_preventive_controls)}")
-        logger.info(f"Total Project Preventive Controls: {len(project_preventive_controls)}")
-        logger.info(f"Total Org Detective Controls: {len(org_detective_controls)}")
-        logger.info(f"Total Project Detective Controls: {len(project_detective_controls)}")
-        logger.info(f"Total Firewall Controls: {len(firewall_controls)}")
+        logger.info(f"Total Controls: {len(controls_list)}")
+        logger.info(f"Total Firewall Rules: {len(firewall_rules_list)}")
+        logger.info(f"Total IAM Roles: {len(iam_roles_list)}")
         
-        # Upsert Org Preventive
-        upserted_org_prev = await self.datastore.upsert_controls(
-            org_preventive_controls, 
-            self.datastore.org_preventive_collection
+        # Upsert Controls
+        upserted_controls = await self.datastore.upsert_controls(
+            controls_list, 
+            self.datastore.controls_collection
         )
         
-        # Upsert Project Preventive
-        upserted_proj_prev = await self.datastore.upsert_controls(
-            project_preventive_controls, 
-            self.datastore.project_preventive_collection
+        # Upsert Firewall Rules
+        upserted_fw = await self.datastore.upsert_controls(
+            firewall_rules_list, 
+            self.datastore.firewall_rules_collection
         )
         
-        # Upsert Org Detective
-        upserted_org_det = await self.datastore.upsert_controls(
-            org_detective_controls, 
-            self.datastore.org_detective_collection
-        )
-        
-        # Upsert Project Detective
-        upserted_proj_det = await self.datastore.upsert_controls(
-            project_detective_controls, 
-            self.datastore.project_detective_collection
-        )
-        
-        # Upsert Firewall Controls
-        upserted_firewall = await self.datastore.upsert_controls(
-            firewall_controls, 
-            self.datastore.firewall_collection
+        # Upsert IAM Roles
+        upserted_iam = await self.datastore.upsert_controls(
+            iam_roles_list, 
+            self.datastore.iam_roles_collection
         )
         
         return {
-            "total_loaded": len(org_preventive_controls) + len(project_preventive_controls) + len(org_detective_controls) + len(project_detective_controls) + len(firewall_controls),
-            "total_upserted": upserted_org_prev + upserted_proj_prev + upserted_org_det + upserted_proj_det + upserted_firewall,
-            "org_preventive_upserted": upserted_org_prev,
-            "project_preventive_upserted": upserted_proj_prev,
-            "org_detective_upserted": upserted_org_det,
-            "project_detective_upserted": upserted_proj_det,
-            "firewall_upserted": upserted_firewall
+            "total_loaded": len(controls_list) + len(firewall_rules_list) + len(iam_roles_list),
+            "total_upserted": upserted_controls + upserted_fw + upserted_iam,
+            "controls_upserted": upserted_controls,
+            "firewall_rules_upserted": upserted_fw,
+            "iam_roles_upserted": upserted_iam
         }
