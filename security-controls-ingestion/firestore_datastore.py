@@ -21,16 +21,20 @@ class Datastore:
             self.db = firestore.Client(project=project_id, database=db_name)
         
         # Default collections from settings
-        self.preventive_collection = self.settings.firestore_collection_preventive
-        self.detective_collection = self.settings.firestore_collection_detective
+        self.org_preventive_collection = self.settings.firestore_collection_org_preventive
+        self.project_preventive_collection = self.settings.firestore_collection_project_preventive
+        self.org_detective_collection = self.settings.firestore_collection_org_detective
+        self.project_detective_collection = self.settings.firestore_collection_project_detective
         self.firewall_collection = self.settings.firestore_collection_firewall
         
         logger.info(f"Initialized Firestore datastore:")
         logger.info(f"  Project: {project_id}")
         logger.info(f"  DB: {db_name}")
-        logger.info(f"  Preventive Collection: {self.preventive_collection}")
-        logger.info(f"  Detective Collection: {self.detective_collection}")
-        logger.info(f"  Firewall Collection: {self.firewall_collection}")
+        logger.info(f"  Org Preventive: {self.org_preventive_collection}")
+        logger.info(f"  Project Preventive: {self.project_preventive_collection}")
+        logger.info(f"  Org Detective: {self.org_detective_collection}")
+        logger.info(f"  Project Detective: {self.project_detective_collection}")
+        logger.info(f"  Firewall: {self.firewall_collection}")
     
     async def upsert_controls(self, controls: List[Dict[str, Any]], collection_name: str) -> int:
         """

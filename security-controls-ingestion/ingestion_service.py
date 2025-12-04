@@ -23,8 +23,10 @@ class IngestionService:
         """
         logger.info("Starting security controls ingestion...")
         
-        preventive_controls = []
-        detective_controls = []
+        org_preventive_controls = []
+        project_preventive_controls = []
+        org_detective_controls = []
+        project_detective_controls = []
         firewall_controls = []
         
         # Aggregation dictionaries for project-level controls
@@ -117,9 +119,9 @@ class IngestionService:
                     if is_firewall:
                         firewall_controls.append(control)
                     elif is_preventive:
-                        preventive_controls.append(control)
+                        org_preventive_controls.append(control)
                     else:
-                        detective_controls.append(control)
+                        org_detective_controls.append(control)
             
             # Process aggregated controls and add to respective lists
             for key, control in aggregated_project_controls.items():
@@ -130,14 +132,18 @@ class IngestionService:
                 if is_fw:
                     firewall_controls.append(control)
                 elif is_prev:
-                    preventive_controls.append(control)
+                    project_preventive_controls.append(control)
                 else:
-                    detective_controls.append(control)
+                    project_detective_controls.append(control)
                     
         except Exception as e:
             logger.error(f"Failed to fetch Security Controls from CAI: {e}")
 
         # 2. Fetch Effective SHA Custom Modules from SCC (Detective)
+        # These are usually Org/Folder level definitions, but can be project level.
+        # For simplicity, if it has a project parent, we could aggregate.
+        # But list_effective... usually returns modules effective at the scope.
+        # Let's assume they are Org Detective for now unless we parse parent.
         logger.info("Fetching Effective SHA Custom Modules from SCC...")
         try:
             async for module in self.scc_client.list_effective_sha_custom_modules():
@@ -151,28 +157,43 @@ class IngestionService:
                     "source_data": module,
                     "type": "sha_custom_module"
                 }
-                detective_controls.append(control)
+                org_detective_controls.append(control)
         except Exception as e:
             logger.error(f"Failed to fetch SHA Custom Modules: {e}")
         
         # 3. Add Built-in SHA Detectors (Static) - Detective
+        # These are generic definitions, so Org Detective fits best.
         logger.info("Adding built-in Security Health Analytics detectors (Static Definitions)...")
-        detective_controls.extend(SHA_DETECTORS)
+        org_detective_controls.extend(SHA_DETECTORS)
         
-        logger.info(f"Total Preventive Controls: {len(preventive_controls)}")
-        logger.info(f"Total Detective Controls: {len(detective_controls)}")
+        logger.info(f"Total Org Preventive Controls: {len(org_preventive_controls)}")
+        logger.info(f"Total Project Preventive Controls: {len(project_preventive_controls)}")
+        logger.info(f"Total Org Detective Controls: {len(org_detective_controls)}")
+        logger.info(f"Total Project Detective Controls: {len(project_detective_controls)}")
         logger.info(f"Total Firewall Controls: {len(firewall_controls)}")
         
-        # Upsert Preventive Controls
-        upserted_preventive = await self.datastore.upsert_controls(
-            preventive_controls, 
-            self.datastore.preventive_collection
+        # Upsert Org Preventive
+        upserted_org_prev = await self.datastore.upsert_controls(
+            org_preventive_controls, 
+            self.datastore.org_preventive_collection
         )
         
-        # Upsert Detective Controls
-        upserted_detective = await self.datastore.upsert_controls(
-            detective_controls, 
-            self.datastore.detective_collection
+        # Upsert Project Preventive
+        upserted_proj_prev = await self.datastore.upsert_controls(
+            project_preventive_controls, 
+            self.datastore.project_preventive_collection
+        )
+        
+        # Upsert Org Detective
+        upserted_org_det = await self.datastore.upsert_controls(
+            org_detective_controls, 
+            self.datastore.org_detective_collection
+        )
+        
+        # Upsert Project Detective
+        upserted_proj_det = await self.datastore.upsert_controls(
+            project_detective_controls, 
+            self.datastore.project_detective_collection
         )
         
         # Upsert Firewall Controls
@@ -182,9 +203,11 @@ class IngestionService:
         )
         
         return {
-            "total_loaded": len(preventive_controls) + len(detective_controls) + len(firewall_controls),
-            "total_upserted": upserted_preventive + upserted_detective + upserted_firewall,
-            "preventive_upserted": upserted_preventive,
-            "detective_upserted": upserted_detective,
+            "total_loaded": len(org_preventive_controls) + len(project_preventive_controls) + len(org_detective_controls) + len(project_detective_controls) + len(firewall_controls),
+            "total_upserted": upserted_org_prev + upserted_proj_prev + upserted_org_det + upserted_proj_det + upserted_firewall,
+            "org_preventive_upserted": upserted_org_prev,
+            "project_preventive_upserted": upserted_proj_prev,
+            "org_detective_upserted": upserted_org_det,
+            "project_detective_upserted": upserted_proj_det,
             "firewall_upserted": upserted_firewall
         }
