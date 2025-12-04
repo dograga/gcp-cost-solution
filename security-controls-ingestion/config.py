@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Collection names
     firestore_collection_preventive: str = "security-controls-preventive"
     firestore_collection_detective: str = "security-controls-detective"
+    firestore_collection_firewall: str = "security-controls-firewall"
     
     # Ingestion Scope Settings
     # Scope Type: "organization" or "folder"

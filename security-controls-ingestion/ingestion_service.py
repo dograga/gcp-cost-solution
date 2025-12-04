@@ -25,6 +25,12 @@ class IngestionService:
         
         preventive_controls = []
         detective_controls = []
+        firewall_controls = []
+        
+        # Aggregation dictionaries for project-level controls
+        # Key: {control_type}_{display_name}
+        # Value: Control dict
+        aggregated_project_controls = {}
         
         # 1. Fetch Security Controls from CAI (Org Policies, VPC-SC, Network, IAM)
         logger.info("Fetching Security Controls from CAI...")
@@ -37,6 +43,7 @@ class IngestionService:
                 control_type = "unknown"
                 description = f"Security Control: {asset['display_name']}"
                 is_preventive = True # Default for CAI assets
+                is_firewall = False
                 
                 if asset_type == "orgpolicy.googleapis.com/Policy":
                     category = "Organization Policy"
@@ -54,6 +61,7 @@ class IngestionService:
                     category = "Network Security"
                     control_type = "firewall_rule"
                     description = f"Firewall Rule: {asset['display_name']}"
+                    is_firewall = True
                 elif asset_type == "compute.googleapis.com/SecurityPolicy":
                     category = "Network Security"
                     control_type = "cloud_armor_policy"
@@ -63,18 +71,65 @@ class IngestionService:
                     control_type = "iam_role"
                     description = f"IAM Role: {asset['display_name']}"
 
-                control = {
-                    "id": asset['name'].replace('/', '_'),
-                    "title": asset['display_name'],
-                    "description": description,
-                    "category": category,
-                    "severity": "HIGH", 
-                    "remediation": "Review control configuration",
-                    "source_data": asset,
-                    "type": control_type
-                }
+                # Check if it's a project-level control
+                project_id = asset.get('project')
+                if project_id:
+                     # Clean project ID (remove 'projects/' prefix if present)
+                    project_id = project_id.replace('projects/', '')
+                    
+                    # Create a unique key for aggregation
+                    # We group by control type and display name (assuming standard naming)
+                    agg_key = f"{control_type}_{asset['display_name']}"
+                    
+                    if agg_key in aggregated_project_controls:
+                        # Update existing entry
+                        aggregated_project_controls[agg_key]['projects'].append(project_id)
+                    else:
+                        # Create new entry
+                        control = {
+                            "id": agg_key, # Use aggregation key as ID
+                            "title": asset['display_name'],
+                            "description": description,
+                            "category": category,
+                            "severity": "HIGH", 
+                            "remediation": "Review control configuration",
+                            "source_data": asset, # Store first occurrence as representative
+                            "type": control_type,
+                            "projects": [project_id],
+                            "is_aggregated": True,
+                            "is_firewall": is_firewall, # Helper flag for sorting later
+                            "is_preventive": is_preventive # Helper flag
+                        }
+                        aggregated_project_controls[agg_key] = control
+                else:
+                    # Non-project level (Org/Folder), treat as individual
+                    control = {
+                        "id": asset['name'].replace('/', '_'),
+                        "title": asset['display_name'],
+                        "description": description,
+                        "category": category,
+                        "severity": "HIGH", 
+                        "remediation": "Review control configuration",
+                        "source_data": asset,
+                        "type": control_type
+                    }
+                    
+                    if is_firewall:
+                        firewall_controls.append(control)
+                    elif is_preventive:
+                        preventive_controls.append(control)
+                    else:
+                        detective_controls.append(control)
+            
+            # Process aggregated controls and add to respective lists
+            for key, control in aggregated_project_controls.items():
+                # Remove helper flags
+                is_fw = control.pop('is_firewall')
+                is_prev = control.pop('is_preventive')
                 
-                if is_preventive:
+                if is_fw:
+                    firewall_controls.append(control)
+                elif is_prev:
                     preventive_controls.append(control)
                 else:
                     detective_controls.append(control)
@@ -106,6 +161,7 @@ class IngestionService:
         
         logger.info(f"Total Preventive Controls: {len(preventive_controls)}")
         logger.info(f"Total Detective Controls: {len(detective_controls)}")
+        logger.info(f"Total Firewall Controls: {len(firewall_controls)}")
         
         # Upsert Preventive Controls
         upserted_preventive = await self.datastore.upsert_controls(
@@ -119,9 +175,16 @@ class IngestionService:
             self.datastore.detective_collection
         )
         
+        # Upsert Firewall Controls
+        upserted_firewall = await self.datastore.upsert_controls(
+            firewall_controls, 
+            self.datastore.firewall_collection
+        )
+        
         return {
-            "total_loaded": len(preventive_controls) + len(detective_controls),
-            "total_upserted": upserted_preventive + upserted_detective,
+            "total_loaded": len(preventive_controls) + len(detective_controls) + len(firewall_controls),
+            "total_upserted": upserted_preventive + upserted_detective + upserted_firewall,
             "preventive_upserted": upserted_preventive,
-            "detective_upserted": upserted_detective
+            "detective_upserted": upserted_detective,
+            "firewall_upserted": upserted_firewall
         }
