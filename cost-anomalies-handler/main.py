@@ -8,15 +8,14 @@ import os
 import json
 import base64
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
-from google.cloud import firestore
-from pydantic import BaseModel
 
-# Import configuration
+# Import configuration and helpers
 import config
+from dataclass import PubSubMessage
+import helper
 
 # Configure logging
 logging.basicConfig(
@@ -32,145 +31,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Initialize Firestore clients
-firestore_client = firestore.Client(
-    project=config.GCP_PROJECT_ID,
-    database=config.FIRESTORE_DATABASE
-)
-
-enrichment_client = firestore.Client(
-    project=config.GCP_PROJECT_ID,
-    database=config.ENRICHMENT_DATABASE
-)
-
 logger.info(f"Initialized Cost Anomaly Handler")
 logger.info(f"Firestore database: {config.FIRESTORE_DATABASE}")
 logger.info(f"Enrichment database: {config.ENRICHMENT_DATABASE}")
-
-
-class PubSubMessage(BaseModel):
-    """Pub/Sub message format"""
-    message: Dict[str, Any]
-    subscription: str
-
-
-class AnomalyEnricher:
-    """Enriches anomaly data with project metadata"""
-    
-    def __init__(self):
-        self.enrichment_cache = {}
-        self.cache_loaded = False
-    
-    def load_enrichment_data(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Load project enrichment data from Firestore.
-        
-        Returns:
-            Dictionary mapping project_id to enrichment data
-        """
-        if self.cache_loaded:
-            return self.enrichment_cache
-        
-        logger.info("Loading project enrichment data from Firestore...")
-        
-        try:
-            collection_ref = enrichment_client.collection(config.ENRICHMENT_COLLECTION)
-            docs = collection_ref.stream()
-            
-            enrichment_data = {}
-            for doc in docs:
-                doc_dict = doc.to_dict()
-                project_id = doc_dict.get(config.ENRICHMENT_PROJECT_ID_FIELD)
-                
-                if project_id:
-                    # Extract only the fields we need
-                    enrichment_fields = {}
-                    for field in config.ENRICHMENT_FIELD_LIST:
-                        if field in doc_dict:
-                            enrichment_fields[field] = doc_dict[field]
-                    
-                    if enrichment_fields:
-                        enrichment_data[project_id] = enrichment_fields
-            
-            self.enrichment_cache = enrichment_data
-            self.cache_loaded = True
-            logger.info(f"Loaded enrichment data for {len(enrichment_data)} projects")
-            return enrichment_data
-            
-        except Exception as e:
-            logger.error(f"Error loading enrichment data: {e}")
-            return {}
-    
-    def enrich_anomaly(self, anomaly: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Enrich anomaly with project metadata.
-        
-        Args:
-            anomaly: Anomaly data from Pub/Sub message
-            
-        Returns:
-            Enriched anomaly dictionary
-        """
-        enrichment_data = self.load_enrichment_data()
-        
-        # Extract project_id from anomaly
-        project_id = anomaly.get('project_id') or anomaly.get('projectId')
-        
-        if project_id and project_id in enrichment_data:
-            # Add enrichment fields
-            for field, value in enrichment_data[project_id].items():
-                anomaly[field] = value
-            logger.debug(f"Enriched anomaly for project: {project_id}")
-        else:
-            # Add null values for missing enrichment fields
-            for field in config.ENRICHMENT_FIELD_LIST:
-                if field not in anomaly:
-                    anomaly[field] = None
-            if project_id:
-                logger.warning(f"No enrichment data found for project: {project_id}")
-        
-        # Add processing metadata
-        anomaly['processed_at'] = datetime.utcnow().isoformat()
-        anomaly['handler_version'] = '1.0.0'
-        
-        return anomaly
-
-
-# Initialize enricher
-enricher = AnomalyEnricher()
-
-
-def save_anomaly_to_firestore(anomaly: Dict[str, Any]) -> str:
-    """
-    Save anomaly to Firestore.
-    
-    Args:
-        anomaly: Enriched anomaly data
-        
-    Returns:
-        Document ID
-    """
-    try:
-        collection_ref = firestore_client.collection(config.FIRESTORE_COLLECTION)
-        
-        # Generate document ID from anomaly ID or use auto-generated
-        doc_id = anomaly.get('anomaly_id') or anomaly.get('id')
-        
-        if doc_id:
-            doc_ref = collection_ref.document(doc_id)
-            doc_ref.set(anomaly, merge=True)
-            logger.info(f"Saved anomaly with ID: {doc_id}")
-        else:
-            # Auto-generate ID
-            doc_ref = collection_ref.add(anomaly)
-            doc_id = doc_ref[1].id
-            logger.info(f"Saved anomaly with auto-generated ID: {doc_id}")
-        
-        return doc_id
-        
-    except Exception as e:
-        logger.error(f"Error saving anomaly to Firestore: {e}")
-        raise
 
 
 @app.get("/")
@@ -190,8 +53,8 @@ async def health():
         "status": "healthy",
         "firestore_database": config.FIRESTORE_DATABASE,
         "enrichment_database": config.ENRICHMENT_DATABASE,
-        "enrichment_cache_loaded": enricher.cache_loaded,
-        "enrichment_projects_count": len(enricher.enrichment_cache)
+        "enrichment_cache_loaded": helper.enricher.cache_loaded,
+        "enrichment_projects_count": len(helper.enricher.enrichment_cache)
     }
 
 
@@ -215,7 +78,9 @@ async def handle_pubsub_push(request: Request):
         body = await request.json()
         logger.debug(f"Received Pub/Sub message: {body}")
         
-        # Extract message
+        # Validate message format using Pydantic model (optional, but good practice)
+        # Note: We don't enforce strict validation here to avoid rejecting messages 
+        # if the format changes slightly, but we check for key fields.
         if 'message' not in body:
             raise HTTPException(status_code=400, detail="Invalid Pub/Sub message format")
         
@@ -232,10 +97,10 @@ async def handle_pubsub_push(request: Request):
         logger.info(f"Processing anomaly: {anomaly_data.get('anomaly_id', 'unknown')}")
         
         # Enrich anomaly with project metadata
-        enriched_anomaly = enricher.enrich_anomaly(anomaly_data)
+        enriched_anomaly = helper.enricher.enrich_anomaly(anomaly_data)
         
         # Save to Firestore
-        doc_id = save_anomaly_to_firestore(enriched_anomaly)
+        doc_id = helper.save_anomaly_to_firestore(enriched_anomaly)
         
         logger.info(f"Successfully processed and saved anomaly: {doc_id}")
         
@@ -268,10 +133,10 @@ async def create_anomaly(anomaly: Dict[str, Any]):
         logger.info(f"Received direct anomaly submission")
         
         # Enrich anomaly
-        enriched_anomaly = enricher.enrich_anomaly(anomaly)
+        enriched_anomaly = helper.enricher.enrich_anomaly(anomaly)
         
         # Save to Firestore
-        doc_id = save_anomaly_to_firestore(enriched_anomaly)
+        doc_id = helper.save_anomaly_to_firestore(enriched_anomaly)
         
         return {
             "status": "success",
@@ -288,9 +153,9 @@ async def create_anomaly(anomaly: Dict[str, Any]):
 async def reload_enrichment():
     """Reload enrichment data cache"""
     try:
-        enricher.cache_loaded = False
-        enricher.enrichment_cache = {}
-        enrichment_data = enricher.load_enrichment_data()
+        helper.enricher.cache_loaded = False
+        helper.enricher.enrichment_cache = {}
+        enrichment_data = helper.enricher.load_enrichment_data()
         
         return {
             "status": "success",
