@@ -24,6 +24,7 @@ class IngestionService:
         logger.info("Starting security controls ingestion...")
         
         controls_list = []
+        self._controls_map = {} # Initialize map for deduplication
         firewall_rules_list = []
         iam_roles_list = []
         
@@ -37,21 +38,40 @@ class IngestionService:
                 
                 # Determine enforcement level based on asset name prefix
                 enforcement_level = "resource" # Default
+                project_id = None
+                
                 if asset_name.startswith("//cloudresourcemanager.googleapis.com/organizations/") or "/organizations/" in asset_name:
                     enforcement_level = "org"
                 elif asset_name.startswith("//cloudresourcemanager.googleapis.com/folders/") or "/folders/" in asset_name:
                     enforcement_level = "folder"
                 elif asset_name.startswith("//cloudresourcemanager.googleapis.com/projects/") or "/projects/" in asset_name:
                     enforcement_level = "project"
+                    # Extract project ID
+                    try:
+                        parts = asset_name.split('/')
+                        if "projects" in parts:
+                            proj_idx = parts.index("projects")
+                            if proj_idx + 1 < len(parts):
+                                project_id = parts[proj_idx + 1]
+                    except Exception:
+                        pass
                 
                 # Determine category, service, and collection
                 category = "preventive" # Default for CAI
                 service = "Unknown"
                 target_list = controls_list # Default collection
+                is_firewall_or_iam = False
+                
+                canonical_id = asset_name.replace('/', '_')
                 
                 if asset_type == "orgpolicy.googleapis.com/Policy":
                     service = "Organization Policy"
+                    # Extract constraint name for canonical ID
+                    # Name format: .../policies/{constraint_name}
+                    constraint_name = asset_name.split('/')[-1]
+                    canonical_id = f"org_policy_{constraint_name}"
                     description = f"Organization Policy: {display_name}"
+                    
                 elif asset_type == "identity.accesscontextmanager.googleapis.com/AccessLevel":
                     service = "VPC Service Controls"
                     description = f"Access Level: {display_name}"
@@ -59,6 +79,7 @@ class IngestionService:
                     # Determine scope based on project/folders fields
                     if asset.get('project'):
                         enforcement_level = "project"
+                        project_id = asset.get('project')
                     elif asset.get('folders'):
                         enforcement_level = "folder"
                     else:
@@ -71,6 +92,7 @@ class IngestionService:
                     # Determine scope based on project/folders fields
                     if asset.get('project'):
                         enforcement_level = "project"
+                        project_id = asset.get('project')
                     elif asset.get('folders'):
                         enforcement_level = "folder"
                     else:
@@ -79,6 +101,7 @@ class IngestionService:
                     service = "VPC Firewall"
                     description = f"Firewall Rule: {display_name}"
                     target_list = firewall_rules_list
+                    is_firewall_or_iam = True
                 elif asset_type == "compute.googleapis.com/SecurityPolicy":
                     service = "Cloud Armor"
                     description = f"Cloud Armor Policy: {display_name}"
@@ -86,26 +109,57 @@ class IngestionService:
                     service = "IAM"
                     description = f"IAM Role: {display_name}"
                     target_list = iam_roles_list
+                    is_firewall_or_iam = True
                 else:
                     description = f"Security Control: {display_name}"
 
-                # Map to new schema
-                control = {
-                    "control_id": asset_name.replace('/', '_'),
-                    "name": display_name,
-                    "description": description,
-                    "category": category,
-                    "enforcement_level": enforcement_level,
-                    "service": service,
-                    "compliance_frameworks": [], # Placeholder
-                    "created_at": "2025-12-04T12:00:00Z", # Should use actual timestamp in prod
-                    "source_data": asset
-                }
-                
-                target_list.append(control)
+                # For Firewall and IAM, we keep existing behavior (list)
+                if is_firewall_or_iam:
+                    control = {
+                        "control_id": asset_name.replace('/', '_'),
+                        "name": display_name,
+                        "description": description,
+                        "category": category,
+                        "enforcement_level": enforcement_level,
+                        "service": service,
+                        "compliance_frameworks": [], # Placeholder
+                        "created_at": "2025-12-04T12:00:00Z", # Should use actual timestamp in prod
+                        "source_data": asset
+                    }
+                    target_list.append(control)
+                else:
+                    # For Controls (Org Policies, VPC-SC), we deduplicate
+                    # Check if control already exists in our map (we'll use a map instead of list for these)
+                    if not hasattr(self, '_controls_map'):
+                        self._controls_map = {}
+                    
+                    if canonical_id in self._controls_map:
+                        # Update existing control
+                        existing_control = self._controls_map[canonical_id]
+                        if project_id and project_id not in existing_control.get('project_ids', []):
+                            existing_control['project_ids'].append(project_id)
+                    else:
+                        # Create new control
+                        control = {
+                            "control_id": canonical_id,
+                            "name": display_name,
+                            "description": description,
+                            "category": category,
+                            "enforcement_level": enforcement_level,
+                            "service": service,
+                            "compliance_frameworks": [], # Placeholder
+                            "created_at": "2025-12-04T12:00:00Z", # Should use actual timestamp in prod
+                            "source_data": asset,
+                            "project_ids": [project_id] if project_id else []
+                        }
+                        self._controls_map[canonical_id] = control
                     
         except Exception as e:
             logger.error(f"Failed to fetch Security Controls from CAI: {e}")
+
+        # Populate controls_list from map
+        if hasattr(self, '_controls_map'):
+            controls_list.extend(self._controls_map.values())
 
         # 2. Fetch Effective SHA Custom Modules from SCC (Detective)
         logger.info("Fetching Effective SHA Custom Modules from SCC...")
