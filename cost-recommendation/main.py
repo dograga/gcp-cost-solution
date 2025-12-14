@@ -282,6 +282,13 @@ class CostRecommendationCollector:
             
             # Cloud Storage
             'google.storage.bucket.SoftDeleteRecommender',
+            
+            # BigQuery
+            'google.bigquery.capacityCommitments.Recommender',
+            'google.bigquery.table.PartitionClusterRecommender',
+            
+            # Reservations
+            'google.compute.IdleResourceRecommender',
         
         return known_recommender_types
     
@@ -319,31 +326,14 @@ class CostRecommendationCollector:
         logger.info(f"Using state filter: {self.state_filter if self.state_filter else 'None (all states)'}")
         
         # Get recommendations for specified locations
-        # Focus on Singapore, India, and Indonesia regions
-        # Include both regions and zones since some recommenders (like Compute Engine) are zone-specific
-        locations = [
-            'global',  # Global recommendations apply to all regions
-            # Singapore region and zones
-            'asia-southeast1',  # Singapore region
-            'asia-southeast1-a',  # Singapore zone A
-            'asia-southeast1-b',  # Singapore zone B
-            'asia-southeast1-c',  # Singapore zone C
-            # Indonesia (Jakarta) region and zones
-            'asia-southeast2',  # Jakarta region
-            'asia-southeast2-a',  # Jakarta zone A
-            'asia-southeast2-b',  # Jakarta zone B
-            'asia-southeast2-c',  # Jakarta zone C
-            # India (Mumbai) region and zones
-            'asia-south1',  # Mumbai region
-            'asia-south1-a',  # Mumbai zone A
-            'asia-south1-b',  # Mumbai zone B
-            'asia-south1-c',  # Mumbai zone C
-            # India (Delhi) region and zones
-            'asia-south2',  # Delhi region
-            'asia-south2-a',  # Delhi zone A
-            'asia-south2-b',  # Delhi zone B
-            'asia-south2-c',  # Delhi zone C
-        ]
+        # Use locations from configuration
+        locations = config.RECOMMENDER_LOCATIONS
+        
+        if not locations:
+            logger.warning("No locations configured, defaulting to 'global'")
+            locations = ['global']
+            
+        logger.info(f"Checking locations: {locations}")
         
         # Iterate through all recommender types
         for recommender_type in recommender_types:
