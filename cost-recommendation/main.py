@@ -270,7 +270,18 @@ class CostRecommendationCollector:
             
             # Spanner
             'google.spanner.instance.IdleRecommender',
-        ]
+            
+            # Resource Manager
+            'google.resourcemanager.project.IdleRecommender',
+            
+            # Committed Use Discounts
+            'google.compute.commitment.UsageCommitmentRecommender',
+            
+            # GKE Workload Rightsizing
+            'google.container.workload.RightSizingRecommender',
+            
+            # Cloud Storage
+            'google.storage.bucket.SoftDeleteRecommender',
         
         return known_recommender_types
     
