@@ -4,7 +4,7 @@ Uses Pydantic for settings management and validation.
 """
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Union
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     
     # Billing Account Configuration
     # Comma-separated list of billing account IDs in env, converted to list
-    billing_account_ids: List[str] = Field(default_factory=list)
+    # Use Union[str, List[str]] to handle env var string parsing
+    billing_account_ids: Union[str, List[str]] = Field(default_factory=list)
     
     @field_validator('billing_account_ids', mode='before')
     @classmethod
@@ -53,9 +54,9 @@ class Settings(BaseSettings):
     inventory_project_id_field: str = "project_id"
     
     # Recommender Configuration
-    recommender_types: List[str] = Field(default_factory=list)
+    recommender_types: Union[str, List[str]] = Field(default_factory=list)
     recommendation_state_filter: str = "ACTIVE"
-    recommender_locations: List[str] = Field(default=["global"])
+    recommender_locations: Union[str, List[str]] = Field(default=["global"])
     
     @field_validator('recommender_types', 'recommender_locations', mode='before')
     @classmethod
