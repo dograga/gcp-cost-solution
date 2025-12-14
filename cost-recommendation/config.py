@@ -1,90 +1,143 @@
 """
 Configuration module for cost-recommendation cron job.
-Loads environment-specific settings from .env files.
+Uses Pydantic for settings management and validation.
 """
 
 import os
-from pathlib import Path
-from dotenv import load_dotenv
+from typing import List, Optional
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 
-# Determine environment
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+class Settings(BaseSettings):
+    """Base settings for the application."""
+    
+    # Application settings
+    app_name: str = "CostRecommendationCollector"
+    environment: str = "dev"
+    log_level: str = "INFO"
+    
+    # GCP Project Configuration
+    gcp_project_id: str = Field(..., description="GCP Project ID")
+    
+    # Billing Account Configuration
+    # Comma-separated list of billing account IDs in env, converted to list
+    billing_account_ids: List[str] = Field(default_factory=list)
+    
+    @field_validator('billing_account_ids', mode='before')
+    @classmethod
+    def split_comma_separated_string(cls, v):
+        if isinstance(v, str):
+            return [i.strip() for i in v.split(',') if i.strip()]
+        return v
+    
+    # Scope Configuration
+    scope_type: str = "project"
+    scope_id: Optional[str] = None
+    
+    @field_validator('scope_id')
+    @classmethod
+    def set_scope_id_default(cls, v, info):
+        if v is None and 'gcp_project_id' in info.data:
+            return info.data['gcp_project_id']
+        return v
 
-# Load environment-specific .env file
-env_file = Path(__file__).parent / f'.env.{ENVIRONMENT}'
-if env_file.exists():
-    load_dotenv(env_file)
-    print(f"Loaded configuration from {env_file}")
-else:
-    print(f"Warning: {env_file} not found, using environment variables or defaults")
+    # Firestore Configuration
+    firestore_database: str = "(default)"
+    firestore_collection: str = "cost_recommendations"
+    
+    # Project Inventory Configuration
+    use_inventory_collection: bool = True
+    inventory_database: str = "dashboard"
+    inventory_collection: str = "projects"
+    inventory_project_id_field: str = "project_id"
+    
+    # Recommender Configuration
+    recommender_types: List[str] = Field(default_factory=list)
+    recommendation_state_filter: str = "ACTIVE"
+    recommender_locations: List[str] = Field(default=["global"])
+    
+    @field_validator('recommender_types', 'recommender_locations', mode='before')
+    @classmethod
+    def split_list(cls, v):
+        if isinstance(v, str):
+            return [i.strip() for i in v.split(',') if i.strip()]
+        return v
+    
+    # Performance Configuration
+    max_workers: int = 10
+    firestore_batch_size: int = 500
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# GCP Project Configuration
-GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
-if not GCP_PROJECT_ID:
-    raise ValueError(f"GCP_PROJECT_ID must be set in .env.{ENVIRONMENT} or environment variables")
+class LocalSettings(Settings):
+    """Local development settings."""
+    environment: str = "local"
+    log_level: str = "DEBUG"
+    firestore_collection: str = "cost_recommendations_local"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.local",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Billing Account Configuration
-# Required for spend-based CUD recommendations
-# Comma-separated list of billing account IDs
-BILLING_ACCOUNT_IDS_STR = os.environ.get('BILLING_ACCOUNT_IDS', '')
-BILLING_ACCOUNT_IDS = [b.strip() for b in BILLING_ACCOUNT_IDS_STR.split(',') if b.strip()]
+class DevSettings(Settings):
+    """Development environment settings."""
+    environment: str = "dev"
+    log_level: str = "DEBUG"
+    firestore_collection: str = "cost_recommendations_dev"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.dev",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Scope Configuration (Project, Folder, or Organization)
-# SCOPE_TYPE: 'project', 'folder', or 'organization'
-SCOPE_TYPE = os.environ.get('SCOPE_TYPE', 'project').lower()
-# SCOPE_ID: Project ID, Folder ID (folders/123456), or Org ID (organizations/123456)
-SCOPE_ID = os.environ.get('SCOPE_ID', GCP_PROJECT_ID)
+class UatSettings(Settings):
+    """UAT environment settings."""
+    environment: str = "uat"
+    log_level: str = "INFO"
+    firestore_collection: str = "cost_recommendations_uat"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.uat",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Firestore Configuration
-FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', '(default)')
-FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'cost_recommendations')
+class ProdSettings(Settings):
+    """Production environment settings."""
+    environment: str = "prod"
+    log_level: str = "WARNING"
+    firestore_collection: str = "cost_recommendations"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.prod",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Project Inventory Configuration
-# Set USE_INVENTORY_COLLECTION=true to read projects from Firestore inventory
-USE_INVENTORY_COLLECTION = True
-INVENTORY_DATABASE = "dashboard"
-INVENTORY_COLLECTION = "projects"
-INVENTORY_PROJECT_ID_FIELD = "project_id"
+def get_settings_class():
+    """Determine the settings class based on the environment."""
+    env = os.getenv("ENVIRONMENT", "dev").lower()
+    settings_map = {
+        "local": LocalSettings,
+        "dev": DevSettings,
+        "uat": UatSettings,
+        "prod": ProdSettings
+    }
+    return settings_map.get(env, DevSettings)
 
-# Recommender Configuration
-# Recommender types to fetch (comma-separated)
-# Leave empty or set to empty string to fetch ALL available recommender types
-RECOMMENDER_TYPES_STR = os.environ.get('RECOMMENDER_TYPES', '')
-RECOMMENDER_TYPES = [r.strip() for r in RECOMMENDER_TYPES_STR.split(',') if r.strip()] if RECOMMENDER_TYPES_STR else []
+@lru_cache()
+def get_settings() -> Settings:
+    """Return a cached instance of the settings."""
+    settings_class = get_settings_class()
+    return settings_class()
 
-# Filter recommendations by state (ACTIVE, CLAIMED, SUCCEEDED, FAILED, DISMISSED)
-RECOMMENDATION_STATE_FILTER = os.environ.get('RECOMMENDATION_STATE_FILTER', 'ACTIVE')
-
-# Recommender Locations
-# Comma-separated list of locations to check (e.g., global,us-central1,us-central1-a)
-# Defaults to 'global' if not specified
-RECOMMENDER_LOCATIONS_STR = os.environ.get('RECOMMENDER_LOCATIONS', 'global')
-RECOMMENDER_LOCATIONS = [l.strip() for l in RECOMMENDER_LOCATIONS_STR.split(',') if l.strip()]
-
-# Performance Configuration
-# Number of parallel threads for processing projects
-MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '10'))
-# Batch size for saving recommendations to Firestore
-FIRESTORE_BATCH_SIZE = int(os.environ.get('FIRESTORE_BATCH_SIZE', '500'))
-
-# Logging Configuration
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-
-# Configuration summary
-CONFIG = {
-    'environment': ENVIRONMENT,
-    'gcp_project_id': GCP_PROJECT_ID,
-    'scope_type': SCOPE_TYPE,
-    'scope_id': SCOPE_ID,
-    'firestore_database': FIRESTORE_DATABASE,
-    'firestore_collection': FIRESTORE_COLLECTION,
-    'use_inventory_collection': USE_INVENTORY_COLLECTION,
-    'inventory_database': INVENTORY_DATABASE,
-    'inventory_collection': INVENTORY_COLLECTION,
-    'inventory_project_id_field': INVENTORY_PROJECT_ID_FIELD,
-    'recommender_types': RECOMMENDER_TYPES,
-    'recommendation_state_filter': RECOMMENDATION_STATE_FILTER,
-    'max_workers': MAX_WORKERS,
-    'firestore_batch_size': FIRESTORE_BATCH_SIZE,
-    'log_level': LOG_LEVEL,
-}
+# For backward compatibility during refactor if needed, but main.py should use get_settings()
+CONFIG = get_settings().model_dump()
