@@ -621,15 +621,20 @@ class CostRecommendationCollector:
             self.ensure_firestore_collection()
             
             # 1. Process Billing Account Recommendations (if configured)
-            if config.BILLING_ACCOUNT_ID:
-                try:
-                    logger.info(f"Processing billing account: {config.BILLING_ACCOUNT_ID}")
-                    billing_recs = self.get_recommendations_for_billing_account(config.BILLING_ACCOUNT_ID)
-                    if billing_recs:
-                        self.save_recommendations_to_firestore(billing_recs, show_progress=False)
-                        logger.info(f"Saved {len(billing_recs)} billing account recommendations")
-                except Exception as e:
-                    logger.error(f"Error processing billing account recommendations: {e}")
+            # 1. Process Billing Account Recommendations (if configured)
+            if config.BILLING_ACCOUNT_IDS:
+                logger.info(f"Processing {len(config.BILLING_ACCOUNT_IDS)} billing accounts")
+                for billing_id in config.BILLING_ACCOUNT_IDS:
+                    try:
+                        logger.info(f"Processing billing account: {billing_id}")
+                        billing_recs = self.get_recommendations_for_billing_account(billing_id)
+                        if billing_recs:
+                            self.save_recommendations_to_firestore(billing_recs, show_progress=False)
+                            logger.info(f"Saved {len(billing_recs)} recommendations for billing account {billing_id}")
+                    except Exception as e:
+                        logger.error(f"Error processing billing account {billing_id}: {e}")
+            else:
+                logger.info("No billing accounts configured, skipping spend-based CUD recommendations")
             
             # 2. Process Project Recommendations
             # Get all projects

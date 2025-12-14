@@ -25,7 +25,9 @@ if not GCP_PROJECT_ID:
 
 # Billing Account Configuration
 # Required for spend-based CUD recommendations
-BILLING_ACCOUNT_ID = os.environ.get('BILLING_ACCOUNT_ID')
+# Comma-separated list of billing account IDs
+BILLING_ACCOUNT_IDS_STR = os.environ.get('BILLING_ACCOUNT_IDS', '')
+BILLING_ACCOUNT_IDS = [b.strip() for b in BILLING_ACCOUNT_IDS_STR.split(',') if b.strip()]
 
 # Scope Configuration (Project, Folder, or Organization)
 # SCOPE_TYPE: 'project', 'folder', or 'organization'
