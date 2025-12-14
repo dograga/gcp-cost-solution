@@ -18,18 +18,21 @@ from google.cloud import resourcemanager_v3
 from google.api_core import exceptions
 
 # Import configuration
-import config
+from config import get_settings
+
+# Initialize settings
+settings = get_settings()
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # Log configuration on startup
-logger.info(f"Starting with environment: {config.ENVIRONMENT}")
-logger.debug(f"Configuration: {config.CONFIG}")
+logger.info(f"Starting with environment: {settings.environment}")
+logger.debug(f"Configuration: {settings.model_dump()}")
 
 
 class CostRecommendationCollector:
@@ -38,24 +41,24 @@ class CostRecommendationCollector:
     def __init__(self):
         """Initialize the recommender and Firestore clients."""
         self.recommender_client = recommender_v1.RecommenderClient()
-        self.db = firestore.Client(project=config.GCP_PROJECT_ID, database=config.FIRESTORE_DATABASE)
+        self.db = firestore.Client(project=settings.gcp_project_id, database=settings.firestore_database)
         self.projects_client = resourcemanager_v3.ProjectsClient()
         
-        # Get configuration from config module
-        self.project_id = config.GCP_PROJECT_ID
-        self.collection_name = config.FIRESTORE_COLLECTION
-        self.recommender_types = [r.strip() for r in config.RECOMMENDER_TYPES]
-        self.state_filter = config.RECOMMENDATION_STATE_FILTER
+        # Get configuration from settings
+        self.project_id = settings.gcp_project_id
+        self.collection_name = settings.firestore_collection
+        self.recommender_types = settings.recommender_types
+        self.state_filter = settings.recommendation_state_filter
         
         # Inventory configuration
-        self.use_inventory = config.USE_INVENTORY_COLLECTION
-        self.inventory_db_name = config.INVENTORY_DATABASE
-        self.inventory_collection_name = config.INVENTORY_COLLECTION
-        self.inventory_project_id_field = config.INVENTORY_PROJECT_ID_FIELD
+        self.use_inventory = settings.use_inventory_collection
+        self.inventory_db_name = settings.inventory_database
+        self.inventory_collection_name = settings.inventory_collection
+        self.inventory_project_id_field = settings.inventory_project_id_field
         
         # Performance configuration
-        self.max_workers = config.MAX_WORKERS
-        self.batch_size = config.FIRESTORE_BATCH_SIZE
+        self.max_workers = settings.max_workers
+        self.batch_size = settings.firestore_batch_size
         
         logger.info(f"Initialized CostRecommendationCollector for project: {self.project_id}")
         logger.info(f"Target Firestore collection: {self.collection_name}")
@@ -77,7 +80,7 @@ class CostRecommendationCollector:
         
         try:
             # Connect to inventory database (may be different from recommendations DB)
-            inventory_db = firestore.Client(project=config.GCP_PROJECT_ID, database=self.inventory_db_name)
+            inventory_db = firestore.Client(project=settings.gcp_project_id, database=self.inventory_db_name)
             collection_ref = inventory_db.collection(self.inventory_collection_name)
             
             # Read all documents from the inventory collection
@@ -111,8 +114,8 @@ class CostRecommendationCollector:
         if self.use_inventory:
             return self.get_projects_from_inventory()
         
-        scope_type = config.SCOPE_TYPE
-        scope_id = config.SCOPE_ID
+        scope_type = settings.scope_type
+        scope_id = settings.scope_id
         
         logger.info(f"Fetching projects for scope: {scope_type} = {scope_id}")
         projects = []
@@ -289,6 +292,7 @@ class CostRecommendationCollector:
             
             # Reservations
             'google.compute.IdleResourceRecommender',
+        ]
         
         return known_recommender_types
     
@@ -327,7 +331,7 @@ class CostRecommendationCollector:
         
         # Get recommendations for specified locations
         # Use locations from configuration
-        locations = config.RECOMMENDER_LOCATIONS
+        locations = settings.recommender_locations
         
         if not locations:
             logger.warning("No locations configured, defaulting to 'global'")
@@ -492,7 +496,7 @@ class CostRecommendationCollector:
         recommender_type = 'google.cloudbilling.commitment.SpendBasedCommitmentRecommender'
         
         # Use locations from configuration
-        locations = config.RECOMMENDER_LOCATIONS
+        locations = settings.recommender_locations
         if not locations:
             locations = ['global']
             
@@ -621,10 +625,9 @@ class CostRecommendationCollector:
             self.ensure_firestore_collection()
             
             # 1. Process Billing Account Recommendations (if configured)
-            # 1. Process Billing Account Recommendations (if configured)
-            if config.BILLING_ACCOUNT_IDS:
-                logger.info(f"Processing {len(config.BILLING_ACCOUNT_IDS)} billing accounts")
-                for billing_id in config.BILLING_ACCOUNT_IDS:
+            if settings.billing_account_ids:
+                logger.info(f"Processing {len(settings.billing_account_ids)} billing accounts")
+                for billing_id in settings.billing_account_ids:
                     try:
                         logger.info(f"Processing billing account: {billing_id}")
                         billing_recs = self.get_recommendations_for_billing_account(billing_id)
