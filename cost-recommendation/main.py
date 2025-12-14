@@ -474,6 +474,67 @@ class CostRecommendationCollector:
             'collected_at': datetime.utcnow().isoformat(),
             'updated_at': datetime.utcnow().isoformat(),
         }
+
+    def get_recommendations_for_billing_account(self, billing_account_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch recommendations for a billing account (specifically spend-based CUDs).
+        
+        Args:
+            billing_account_id: The billing account ID
+            
+        Returns:
+            List of recommendation records
+        """
+        logger.info(f"Fetching recommendations for billing account: {billing_account_id}")
+        all_recommendations = []
+        
+        # Spend-based CUD recommender
+        recommender_type = 'google.cloudbilling.commitment.SpendBasedCommitmentRecommender'
+        
+        # Use locations from configuration
+        locations = config.RECOMMENDER_LOCATIONS
+        if not locations:
+            locations = ['global']
+            
+        for location in locations:
+            try:
+                # Billing account parent format: billingAccounts/{billing_account_id}/locations/{location}/recommenders/{recommender_id}
+                parent = f"billingAccounts/{billing_account_id}/locations/{location}/recommenders/{recommender_type}"
+                
+                request = recommender_v1.ListRecommendationsRequest(
+                    parent=parent,
+                    filter=f"stateInfo.state={self.state_filter}" if self.state_filter else None
+                )
+                
+                recommendations = self.recommender_client.list_recommendations(request=request)
+                
+                rec_count = 0
+                for recommendation in recommendations:
+                    # Parse similar to project recommendations but with billing account context
+                    record = self._parse_recommendation(
+                        recommendation, 
+                        project_id=f"billing-{billing_account_id}", # Use billing ID as pseudo-project ID
+                        project_number=billing_account_id,
+                        location=location,
+                        recommender_type=recommender_type
+                    )
+                    all_recommendations.append(record)
+                    rec_count += 1
+                
+                if rec_count > 0:
+                    logger.debug(f"Found {rec_count} billing recommendation(s) in {location}")
+                    
+            except exceptions.NotFound:
+                continue
+            except exceptions.PermissionDenied:
+                logger.debug(f"Permission denied for billing account {billing_account_id} in {location}")
+                continue
+            except Exception as e:
+                logger.debug(f"Error fetching billing recommendations for {location}: {type(e).__name__}")
+                continue
+                
+        logger.info(f"Collected {len(all_recommendations)} billing recommendations")
+        return all_recommendations
     
     def save_recommendations_to_firestore(self, records: List[Dict[str, Any]], show_progress: bool = False):
         """
@@ -559,6 +620,18 @@ class CostRecommendationCollector:
             # Ensure Firestore collection is accessible
             self.ensure_firestore_collection()
             
+            # 1. Process Billing Account Recommendations (if configured)
+            if config.BILLING_ACCOUNT_ID:
+                try:
+                    logger.info(f"Processing billing account: {config.BILLING_ACCOUNT_ID}")
+                    billing_recs = self.get_recommendations_for_billing_account(config.BILLING_ACCOUNT_ID)
+                    if billing_recs:
+                        self.save_recommendations_to_firestore(billing_recs, show_progress=False)
+                        logger.info(f"Saved {len(billing_recs)} billing account recommendations")
+                except Exception as e:
+                    logger.error(f"Error processing billing account recommendations: {e}")
+            
+            # 2. Process Project Recommendations
             # Get all projects
             projects = self.get_all_projects()
             

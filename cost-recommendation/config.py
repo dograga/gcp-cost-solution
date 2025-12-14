@@ -23,6 +23,10 @@ GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
 if not GCP_PROJECT_ID:
     raise ValueError(f"GCP_PROJECT_ID must be set in .env.{ENVIRONMENT} or environment variables")
 
+# Billing Account Configuration
+# Required for spend-based CUD recommendations
+BILLING_ACCOUNT_ID = os.environ.get('BILLING_ACCOUNT_ID')
+
 # Scope Configuration (Project, Folder, or Organization)
 # SCOPE_TYPE: 'project', 'folder', or 'organization'
 SCOPE_TYPE = os.environ.get('SCOPE_TYPE', 'project').lower()
