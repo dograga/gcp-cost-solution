@@ -49,6 +49,12 @@ RECOMMENDER_TYPES = [r.strip() for r in RECOMMENDER_TYPES_STR.split(',') if r.st
 # Filter recommendations by state (ACTIVE, CLAIMED, SUCCEEDED, FAILED, DISMISSED)
 RECOMMENDATION_STATE_FILTER = os.environ.get('RECOMMENDATION_STATE_FILTER', 'ACTIVE')
 
+# Recommender Locations
+# Comma-separated list of locations to check (e.g., global,us-central1,us-central1-a)
+# Defaults to 'global' if not specified
+RECOMMENDER_LOCATIONS_STR = os.environ.get('RECOMMENDER_LOCATIONS', 'global')
+RECOMMENDER_LOCATIONS = [l.strip() for l in RECOMMENDER_LOCATIONS_STR.split(',') if l.strip()]
+
 # Performance Configuration
 # Number of parallel threads for processing projects
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '10'))
