@@ -286,14 +286,11 @@ class CostRecommendationCollector:
             # Cloud Storage
             'google.storage.bucket.SoftDeleteRecommender',
             
-            # BigQuery
-            'google.bigquery.capacityCommitments.Recommender',
-            'google.bigquery.table.PartitionClusterRecommender',
-            
             # Reservations
             'google.compute.IdleResourceRecommender',
         ]
         
+        logger.info(f"Discovered {len(known_recommender_types)} recommender types")
         return known_recommender_types
     
     def get_recommendations_for_project(
