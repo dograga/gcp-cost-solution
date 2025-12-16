@@ -335,18 +335,23 @@ class CostRecommendationCollector:
             locations = ['global']
             
         logger.info(f"Checking locations: {locations}")
+        logger.debug(f"Type of locations: {type(locations)}")
         
         # Iterate through all recommender types
         for recommender_type in recommender_types:
             for location in locations:
                 try:
                     parent = f"projects/{project_number}/locations/{location}/recommenders/{recommender_type}"
+                    logger.debug(f"Checking parent: {parent}")
                     
                     request = recommender_v1.ListRecommendationsRequest(
                         parent=parent,
                         filter=f"stateInfo.state={self.state_filter}" if self.state_filter else None
                     )
                     
+                    if recommender_type == 'google.compute.image.IdleResourceRecommender':
+                        logger.info(f"Checking Idle Image Recommender for {project_id} in {location}")
+
                     recommendations = self.recommender_client.list_recommendations(request=request)
                     
                     rec_count = 0
@@ -361,6 +366,9 @@ class CostRecommendationCollector:
                         all_recommendations.append(record)
                         rec_count += 1
                     
+                    if recommender_type == 'google.compute.image.IdleResourceRecommender':
+                        logger.info(f"Idle Image Recommender found {rec_count} recommendations in {location}")
+
                     if rec_count > 0:
                         logger.debug(f"Found {rec_count} recommendation(s) for {recommender_type} in {location}")
                         
