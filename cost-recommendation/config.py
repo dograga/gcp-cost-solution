@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     inventory_database: str = "dashboard"
     inventory_collection: str = "projects"
     inventory_project_id_field: str = "project_id"
+    inventory_app_code_field: str = "app_code"
+    inventory_bu_code_field: str = "bu_code"
     
     # Recommender Configuration
     recommender_types: Union[str, List[str]] = Field(default_factory=list)

@@ -55,6 +55,8 @@ class CostRecommendationCollector:
         self.inventory_db_name = settings.inventory_database
         self.inventory_collection_name = settings.inventory_collection
         self.inventory_project_id_field = settings.inventory_project_id_field
+        self.inventory_app_code_field = settings.inventory_app_code_field
+        self.inventory_bu_code_field = settings.inventory_bu_code_field
         
         # Performance configuration
         self.max_workers = settings.max_workers
@@ -68,15 +70,15 @@ class CostRecommendationCollector:
         logger.info(f"Recommender types: {len(self.recommender_types)} types configured")
         logger.info(f"Performance: {self.max_workers} workers, batch size {self.batch_size}")
     
-    def get_projects_from_inventory(self) -> List[str]:
+    def get_projects_from_inventory(self) -> Dict[str, Dict[str, Any]]:
         """
-        Retrieve project IDs from Firestore inventory collection.
+        Retrieve project IDs and metadata from Firestore inventory collection.
         
         Returns:
-            List of project IDs
+            Dictionary mapping project_id to metadata (app_code, bu_code)
         """
         logger.info(f"Reading projects from inventory: {self.inventory_db_name}/{self.inventory_collection_name}")
-        projects = []
+        projects = {}
         
         try:
             # Connect to inventory database (may be different from recommendations DB)
@@ -90,8 +92,15 @@ class CostRecommendationCollector:
                 doc_data = doc.to_dict()
                 if self.inventory_project_id_field in doc_data:
                     project_id = doc_data[self.inventory_project_id_field]
-                    projects.append(project_id)
-                    logger.debug(f"Found project from inventory: {project_id}")
+                    
+                    # Extract metadata
+                    metadata = {
+                        'app_code': doc_data.get(self.inventory_app_code_field),
+                        'bu_code': doc_data.get(self.inventory_bu_code_field)
+                    }
+                    
+                    projects[project_id] = metadata
+                    logger.debug(f"Found project from inventory: {project_id} with metadata: {metadata}")
                 else:
                     logger.warning(f"Document {doc.id} missing field '{self.inventory_project_id_field}'")
             
@@ -102,13 +111,13 @@ class CostRecommendationCollector:
             logger.error(f"Error reading from inventory collection: {e}")
             raise
     
-    def get_all_projects(self) -> List[str]:
+    def get_all_projects(self) -> Union[List[str], Dict[str, Dict[str, Any]]]:
         """
         Retrieve all accessible GCP projects based on scope configuration.
         Supports project, folder, organization level collection, or inventory collection.
         
         Returns:
-            List of project IDs
+            List of project IDs OR Dictionary of project IDs with metadata
         """
         # If using inventory collection, read from there
         if self.use_inventory:
@@ -296,7 +305,8 @@ class CostRecommendationCollector:
     def get_recommendations_for_project(
         self, 
         project_id: str,
-        project_number: str = None
+        project_number: str = None,
+        metadata: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
         """
         Fetch recommendations for a specific project across all recommender types.
@@ -304,6 +314,7 @@ class CostRecommendationCollector:
         Args:
             project_id: The GCP project ID
             project_number: The GCP project number (optional)
+            metadata: Optional metadata (app_code, bu_code) to enrich recommendations
             
         Returns:
             List of recommendation records
@@ -349,9 +360,6 @@ class CostRecommendationCollector:
                         filter=f"stateInfo.state={self.state_filter}" if self.state_filter else None
                     )
                     
-                    if recommender_type == 'google.compute.image.IdleResourceRecommender':
-                        logger.info(f"Checking Idle Image Recommender for {project_id} in {location}")
-
                     recommendations = self.recommender_client.list_recommendations(request=request)
                     
                     rec_count = 0
@@ -361,14 +369,12 @@ class CostRecommendationCollector:
                             project_id, 
                             project_number,
                             location,
-                            recommender_type
+                            recommender_type,
+                            metadata
                         )
                         all_recommendations.append(record)
                         rec_count += 1
                     
-                    if recommender_type == 'google.compute.image.IdleResourceRecommender':
-                        logger.info(f"Idle Image Recommender found {rec_count} recommendations in {location}")
-
                     if rec_count > 0:
                         logger.debug(f"Found {rec_count} recommendation(s) for {recommender_type} in {location}")
                         
@@ -397,7 +403,8 @@ class CostRecommendationCollector:
         project_id: str,
         project_number: str,
         location: str,
-        recommender_type: str
+        recommender_type: str,
+        metadata: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
         Parse a recommendation object into a dictionary for BigQuery.
@@ -408,6 +415,7 @@ class CostRecommendationCollector:
             project_number: The project number
             location: The location
             recommender_type: The recommender type
+            metadata: Optional metadata (app_code, bu_code)
             
         Returns:
             Dictionary with recommendation data
@@ -458,7 +466,7 @@ class CostRecommendationCollector:
         # Get recommendation ID from name
         recommendation_id = recommendation.name.split('/')[-1]
         
-        return {
+        record = {
             'recommendation_id': recommendation_id,
             'recommendation_name': recommendation.name,
             'project_id': project_id,
@@ -482,7 +490,11 @@ class CostRecommendationCollector:
             'content': str(recommendation.content) if recommendation.content else None,
             'collected_at': datetime.utcnow().isoformat(),
             'updated_at': datetime.utcnow().isoformat(),
+            'app_code': metadata.get('app_code') if metadata else None,
+            'bu_code': metadata.get('bu_code') if metadata else None,
         }
+            
+        return record
 
     def get_recommendations_for_billing_account(self, billing_account_id: str) -> List[Dict[str, Any]]:
         """
@@ -646,11 +658,19 @@ class CostRecommendationCollector:
             
             # 2. Process Project Recommendations
             # Get all projects
-            projects = self.get_all_projects()
+            projects_data = self.get_all_projects()
             
-            if not projects:
+            if not projects_data:
                 logger.warning("No projects found")
                 return
+            
+            # Determine if we have a list or a dict
+            if isinstance(projects_data, dict):
+                projects = list(projects_data.keys())
+                projects_metadata = projects_data
+            else:
+                projects = projects_data
+                projects_metadata = {}
             
             # For large-scale processing, save recommendations incrementally
             # instead of accumulating all in memory
@@ -662,7 +682,8 @@ class CostRecommendationCollector:
                 """Process a single project and save recommendations immediately."""
                 logger.debug(f"Processing project: {project_id}")
                 try:
-                    recommendations = self.get_recommendations_for_project(project_id)
+                    metadata = projects_metadata.get(project_id) if projects_metadata else None
+                    recommendations = self.get_recommendations_for_project(project_id, metadata=metadata)
                     
                     # Save recommendations immediately if we have any
                     if recommendations:
