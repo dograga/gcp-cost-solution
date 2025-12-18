@@ -8,6 +8,12 @@ from typing import List, Optional, Union
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
+from dotenv import load_dotenv
+
+# Explicitly load .env files to ensure they are present in os.environ
+# This helps if Pydantic's env_file logic is bypassed or behaves differently
+load_dotenv()
+load_dotenv(f".env.{os.getenv('ENVIRONMENT', 'dev').lower()}")
 
 class Settings(BaseSettings):
     """Base settings for the application."""
