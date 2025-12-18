@@ -18,8 +18,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     
     # GCP Project Configuration
-    gcp_project_id: str = Field(..., description="GCP Project ID")
+    # Try to get from GCP_PROJECT_ID, then GCP_PROJECT (standard in Cloud Run), else None
+    gcp_project_id: Optional[str] = Field(default=None, validation_alias="GCP_PROJECT_ID")
     
+    @field_validator('gcp_project_id', mode='before')
+    @classmethod
+    def set_gcp_project_id(cls, v):
+        if v:
+            return v
+        return os.getenv("GCP_PROJECT")
+
     # Billing Account Configuration
     # Comma-separated list of billing account IDs in env, converted to list
     # Use Union[str, List[str]] to handle env var string parsing
@@ -28,6 +36,8 @@ class Settings(BaseSettings):
     @field_validator('billing_account_ids', mode='before')
     @classmethod
     def split_comma_separated_string(cls, v):
+        if v is None:
+            return []
         if isinstance(v, str):
             return [i.strip() for i in v.split(',') if i.strip()]
         return v
@@ -39,7 +49,8 @@ class Settings(BaseSettings):
     @field_validator('scope_id')
     @classmethod
     def set_scope_id_default(cls, v, info):
-        if v is None and 'gcp_project_id' in info.data:
+        # If scope_id is not set, default to gcp_project_id
+        if v is None and info.data.get('gcp_project_id'):
             return info.data['gcp_project_id']
         return v
 
@@ -63,6 +74,8 @@ class Settings(BaseSettings):
     @field_validator('recommender_types', 'recommender_locations', mode='before')
     @classmethod
     def split_list(cls, v):
+        if v is None:
+            return []
         if isinstance(v, str):
             return [i.strip() for i in v.split(',') if i.strip()]
         return v

@@ -8,7 +8,7 @@ import os
 import logging
 import json
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
