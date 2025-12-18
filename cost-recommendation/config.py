@@ -12,8 +12,11 @@ from dotenv import load_dotenv
 
 # Explicitly load .env files to ensure they are present in os.environ
 # This helps if Pydantic's env_file logic is bypassed or behaves differently
-load_dotenv()
-load_dotenv(f".env.{os.getenv('ENVIRONMENT', 'dev').lower()}")
+# Load specific environment file FIRST (e.g., .env.dev) so it takes precedence over .env
+# but does NOT override system environment variables.
+env_name = os.getenv('APP_ENV') or os.getenv('ENVIRONMENT') or 'dev'
+load_dotenv(f".env.{env_name.lower()}")
+load_dotenv() # Load generic .env as fallback
 
 class Settings(BaseSettings):
     """Base settings for the application."""
@@ -146,7 +149,7 @@ class ProdSettings(Settings):
 
 def get_settings_class():
     """Determine the settings class based on the environment."""
-    env = os.getenv("ENVIRONMENT", "dev").lower()
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "dev").lower()
     settings_map = {
         "local": LocalSettings,
         "dev": DevSettings,
