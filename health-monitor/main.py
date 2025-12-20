@@ -72,11 +72,19 @@ class HealthEventMonitor:
             # Construct parent path for organization
             parent = f"organizations/{self.organization_id}/locations/global"
             
+            # Build filter string
+            filter_parts = ["state=ACTIVE"]
+            if self.event_categories:
+                categories_filter = " OR ".join([f"category={cat}" for cat in self.event_categories])
+                filter_parts.append(f"({categories_filter})")
+            
+            filter_str = " AND ".join(filter_parts)
+            logger.debug(f"Using API filter: {filter_str}")
+            
             # Create request
             request = servicehealth_v1.ListOrganizationEventsRequest(
                 parent=parent,
-                # Filter for active events only (exclude CLOSED and RESOLVED)
-                filter="state=ACTIVE"
+                filter=filter_str
             )
             
             # List events
@@ -179,12 +187,12 @@ class HealthEventMonitor:
             if not product:
                 continue
             
-            # Check for exact match or partial match (case-insensitive)
             product_lower = product.lower()
             for monitored_product in self.products:
                 monitored_lower = monitored_product.lower()
-                # Match if either contains the other (flexible matching)
-                if monitored_lower in product_lower or product_lower in monitored_lower:
+                # Match if exact or if monitored product is a substring (e.g., "SQL" matches "Cloud SQL")
+                # but avoid too broad matches if possible.
+                if monitored_lower == product_lower or monitored_lower in product_lower:
                     return True
         
         return False
@@ -199,30 +207,50 @@ class HealthEventMonitor:
         Returns:
             Dictionary with event data
         """
-        # Extract event ID from name (format: organizations/{org}/locations/{loc}/organizationEvents/{id})
+        # Extract event ID from name
         event_id = event.name.split('/')[-1]
         
-        # Parse event impacts
+        # Parse impacts and locations
+        impacts, locations = self._parse_impacts(event.event_impacts)
+        
+        # Determine affected regions
+        affected_regions = self._extract_regions_from_locations(locations)
+        
+        # Current time for tracking
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        return {
+            'event_id': event_id,
+            'event_name': event.name,
+            'title': event.title,
+            'description': getattr(event, 'description', None),
+            'category': event.category.name if event.category else None,
+            'state': event.state.name if event.state else None,
+            'detailed_category': getattr(event.detailed_category, 'name', None) if hasattr(event, 'detailed_category') else None,
+            'detailed_state': getattr(event.detailed_state, 'name', None) if hasattr(event, 'detailed_state') else None,
+            'start_time': event.start_time.isoformat() if event.start_time else None,
+            'end_time': event.end_time.isoformat() if event.end_time else None,
+            'update_time': event.update_time.isoformat() if event.update_time else None,
+            'impacts': impacts,
+            'locations': locations,
+            'affected_regions': affected_regions,
+            'collected_at': now_iso,
+            'last_seen_at': now_iso,
+        }
+
+    def _parse_impacts(self, event_impacts) -> tuple[List[Dict[str, Any]], List[str]]:
+        """Helper to parse event impacts and extract locations."""
         impacts = []
-        location_strings = []
-        for impact in event.event_impacts:
-            # Extract location string from Location object
+        locations = set()
+        
+        for impact in event_impacts:
             location_str = None
             if hasattr(impact, 'location') and impact.location:
-                # Location object has a location_name attribute
-                if hasattr(impact.location, 'location_name'):
-                    location_str = impact.location.location_name
-                else:
-                    location_str = str(impact.location)
+                location_str = getattr(impact.location, 'location_name', str(impact.location))
             
-            # Extract product string from Product object
             product_str = None
             if hasattr(impact, 'product') and impact.product:
-                # Product object has a product_name attribute
-                if hasattr(impact.product, 'product_name'):
-                    product_str = impact.product.product_name
-                else:
-                    product_str = str(impact.product)
+                product_str = getattr(impact.product, 'product_name', str(impact.product))
             
             impacts.append({
                 'product': product_str,
@@ -230,31 +258,9 @@ class HealthEventMonitor:
             })
             
             if location_str:
-                location_strings.append(location_str)
-        
-        # Extract unique locations
-        locations = list(set(location_strings))
-        
-        # Determine affected regions
-        affected_regions = self._extract_regions_from_locations(locations)
-        
-        return {
-            'event_id': event_id,
-            'event_name': event.name,
-            'title': event.title,
-            'description': event.description if hasattr(event, 'description') else None,
-            'category': event.category.name if event.category else None,
-            'state': event.state.name if event.state else None,
-            'detailed_category': event.detailed_category.name if hasattr(event, 'detailed_category') and event.detailed_category else None,
-            'detailed_state': event.detailed_state.name if hasattr(event, 'detailed_state') and event.detailed_state else None,
-            'start_time': event.start_time.isoformat() if event.start_time else None,
-            'end_time': event.end_time.isoformat() if event.end_time else None,
-            'update_time': event.update_time.isoformat() if event.update_time else None,
-            'impacts': impacts,
-            'locations': locations,
-            'affected_regions': affected_regions,
-            'collected_at': datetime.now(timezone.utc).isoformat(),
-        }
+                locations.add(location_str)
+                
+        return impacts, list(locations)
     
     def _extract_regions_from_locations(self, locations: List[str]) -> List[str]:
         """
