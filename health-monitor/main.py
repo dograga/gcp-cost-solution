@@ -15,18 +15,21 @@ from google.cloud import firestore
 from google.api_core import exceptions
 
 # Import configuration
-import config
+from config import get_settings
+
+# Initialize settings
+settings = get_settings()
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # Log configuration on startup
-logger.info(f"Starting with environment: {config.ENVIRONMENT}")
-logger.debug(f"Configuration: {config.CONFIG}")
+logger.info(f"Starting with environment: {settings.environment}")
+logger.debug(f"Configuration: {settings.model_dump()}")
 
 
 class HealthEventMonitor:
@@ -35,16 +38,16 @@ class HealthEventMonitor:
     def __init__(self):
         """Initialize the Service Health and Firestore clients."""
         self.health_client = servicehealth_v1.ServiceHealthClient()
-        self.db = firestore.Client(project=config.GCP_PROJECT_ID, database=config.FIRESTORE_DATABASE)
+        self.db = firestore.Client(project=settings.gcp_project_id, database=settings.firestore_database)
         
         # Get configuration
-        self.organization_id = config.ORGANIZATION_ID
-        self.regions = config.REGIONS
-        self.event_categories = config.EVENT_CATEGORIES
-        self.filter_by_product = config.FILTER_BY_PRODUCT
-        self.products = config.PRODUCTS
-        self.region_status_collection = config.REGION_STATUS_COLLECTION
-        self.events_collection = config.EVENTS_COLLECTION
+        self.organization_id = settings.organization_id
+        self.regions = settings.regions
+        self.event_categories = settings.event_categories
+        self.filter_by_product = settings.filter_by_product
+        self.products = settings.products
+        self.region_status_collection = settings.region_status_collection
+        self.events_collection = settings.events_collection
         
         logger.info(f"Initialized HealthEventMonitor for organization: {self.organization_id}")
         logger.info(f"Monitoring regions: {self.regions}")

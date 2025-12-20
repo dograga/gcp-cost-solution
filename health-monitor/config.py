@@ -1,72 +1,129 @@
 """
 Configuration module for health-monitor job.
-Loads environment-specific settings from .env files.
+Uses Pydantic for settings management and validation.
 """
 
 import os
-from pathlib import Path
+from typing import List, Optional, Union
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 from dotenv import load_dotenv
 
-# Determine environment
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+# Explicitly load .env files to ensure they are present in os.environ
+# This helps if Pydantic's env_file logic is bypassed or behaves differently
+# Load specific environment file FIRST (e.g., .env.dev) so it takes precedence over .env
+# but does NOT override system environment variables.
+env_name = os.getenv('APP_ENV') or os.getenv('ENVIRONMENT') or 'dev'
+load_dotenv(f".env.{env_name.lower()}")
+load_dotenv() # Load generic .env as fallback
 
-# Load environment-specific .env file
-env_file = Path(__file__).parent / f'.env.{ENVIRONMENT}'
-if env_file.exists():
-    load_dotenv(env_file)
-    print(f"Loaded configuration from {env_file}")
-else:
-    print(f"Warning: {env_file} not found, using environment variables or defaults")
+class Settings(BaseSettings):
+    """Base settings for the application."""
+    
+    # Application settings
+    app_name: str = "HealthMonitor"
+    environment: str = "dev"
+    log_level: str = "INFO"
+    
+    # GCP Project Configuration
+    # Try to get from GCP_PROJECT_ID, then GCP_PROJECT (standard in Cloud Run), else None
+    gcp_project_id: Optional[str] = Field(default=None, validation_alias="GCP_PROJECT_ID")
+    
+    @field_validator('gcp_project_id', mode='before')
+    @classmethod
+    def set_gcp_project_id(cls, v):
+        if v:
+            return v
+        return os.getenv("GCP_PROJECT")
+    
+    # Organization Configuration
+    organization_id: str = Field(..., description="Organization ID")
 
-# GCP Project Configuration
-GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
-if not GCP_PROJECT_ID:
-    raise ValueError(f"GCP_PROJECT_ID must be set in .env.{ENVIRONMENT} or environment variables")
+    # Firestore Configuration
+    firestore_database: str = "(default)"
+    region_status_collection: str = "region_status"
+    events_collection: str = "health_events"
+    
+    # Monitoring Configuration
+    regions: Union[str, List[str]] = Field(default=["asia-southeast1", "asia-southeast2", "asia-south1", "asia-south2", "global"])
+    event_categories: Union[str, List[str]] = Field(default_factory=list)
+    
+    filter_by_product: bool = False
+    products: Union[str, List[str]] = Field(default_factory=list)
+    
+    @field_validator('regions', 'event_categories', 'products', mode='before')
+    @classmethod
+    def split_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [i.strip() for i in v.split(',') if i.strip()]
+        return v
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Organization Configuration
-ORGANIZATION_ID = os.environ.get('ORGANIZATION_ID')
-if not ORGANIZATION_ID:
-    raise ValueError(f"ORGANIZATION_ID must be set in .env.{ENVIRONMENT} or environment variables")
+class LocalSettings(Settings):
+    """Local development settings."""
+    environment: str = "local"
+    log_level: str = "DEBUG"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.local",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Firestore Configuration
-FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', '(default)')
-REGION_STATUS_COLLECTION = os.environ.get('REGION_STATUS_COLLECTION', 'region_status')
-EVENTS_COLLECTION = os.environ.get('EVENTS_COLLECTION', 'health_events')
+class DevSettings(Settings):
+    """Development environment settings."""
+    environment: str = "dev"
+    log_level: str = "DEBUG"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.dev",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Regions to Monitor
-# Comma-separated list of regions to monitor
-REGIONS_STR = os.environ.get('REGIONS', 'asia-southeast1,asia-southeast2,asia-south1,asia-south2,global')
-REGIONS = [r.strip() for r in REGIONS_STR.split(',') if r.strip()]
+class UatSettings(Settings):
+    """UAT environment settings."""
+    environment: str = "uat"
+    log_level: str = "INFO"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.uat",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Event Categories to Monitor
-# Comma-separated list of event categories (leave empty for all)
-EVENT_CATEGORIES_STR = os.environ.get('EVENT_CATEGORIES', '')
-EVENT_CATEGORIES = [c.strip() for c in EVENT_CATEGORIES_STR.split(',') if c.strip()] if EVENT_CATEGORIES_STR else []
+class ProdSettings(Settings):
+    """Production environment settings."""
+    environment: str = "prod"
+    log_level: str = "WARNING"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.prod",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Product Filtering Toggle
-# Set to True to enable product filtering, False to disable
-FILTER_BY_PRODUCT_STR = os.environ.get('FILTER_BY_PRODUCT', 'False')
-FILTER_BY_PRODUCT = FILTER_BY_PRODUCT_STR.lower() in ('true', '1', 'yes', 'on')
+def get_settings_class():
+    """Determine the settings class based on the environment."""
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "dev").lower()
+    settings_map = {
+        "local": LocalSettings,
+        "dev": DevSettings,
+        "uat": UatSettings,
+        "prod": ProdSettings
+    }
+    return settings_map.get(env, DevSettings)
 
-# Products/Services to Monitor
-# Comma-separated list of GCP products/services (only used if FILTER_BY_PRODUCT is True)
-PRODUCTS_STR = os.environ.get('PRODUCTS', '')
-PRODUCTS = [p.strip() for p in PRODUCTS_STR.split(',') if p.strip()] if PRODUCTS_STR else []
-
-# Logging Configuration
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-
-# Configuration summary
-CONFIG = {
-    'environment': ENVIRONMENT,
-    'gcp_project_id': GCP_PROJECT_ID,
-    'organization_id': ORGANIZATION_ID,
-    'firestore_database': FIRESTORE_DATABASE,
-    'region_status_collection': REGION_STATUS_COLLECTION,
-    'events_collection': EVENTS_COLLECTION,
-    'regions': REGIONS,
-    'event_categories': EVENT_CATEGORIES,
-    'filter_by_product': FILTER_BY_PRODUCT,
-    'products': PRODUCTS,
-    'log_level': LOG_LEVEL,
-}
+@lru_cache()
+def get_settings() -> Settings:
+    """Return a cached instance of the settings."""
+    settings_class = get_settings_class()
+    return settings_class()
