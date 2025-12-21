@@ -6,7 +6,7 @@ Retrieves invoices from Cloud Billing API for chargeback purposes.
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
@@ -16,18 +16,21 @@ from google.cloud import firestore
 from google.api_core import exceptions, retry
 
 # Import configuration
-import config
+from config import get_settings
+
+# Initialize settings
+settings = get_settings()
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # Log configuration on startup
-logger.info(f"Starting with environment: {config.ENVIRONMENT}")
-logger.debug(f"Configuration: {config.CONFIG}")
+logger.info(f"Starting with environment: {settings.environment}")
+logger.debug(f"Configuration: {settings.model_dump()}")
 
 
 class InvoiceCollector:
@@ -39,14 +42,14 @@ class InvoiceCollector:
         
         # Firestore client for invoice storage
         self.firestore_client = firestore.Client(
-            project=config.GCP_PROJECT_ID,
-            database=config.FIRESTORE_DATABASE
+            project=settings.gcp_project_id,
+            database=settings.firestore_database
         )
         
-        self.billing_account_ids = config.BILLING_ACCOUNT_LIST
+        self.billing_account_ids = settings.billing_account_ids
         
-        logger.info(f"Initialized InvoiceCollector for project: {config.GCP_PROJECT_ID}")
-        logger.info(f"Firestore database: {config.FIRESTORE_DATABASE}")
+        logger.info(f"Initialized InvoiceCollector for project: {settings.gcp_project_id}")
+        logger.info(f"Firestore database: {settings.firestore_database}")
     
     def get_billing_accounts(self) -> List[str]:
         """
@@ -87,7 +90,7 @@ class InvoiceCollector:
         months = []
         current_date = datetime.now()
         
-        for i in range(config.MONTHS_BACK):
+        for i in range(settings.months_back):
             month_date = current_date - relativedelta(months=i)
             month_str = month_date.strftime('%Y-%m')
             months.append(month_str)
@@ -177,7 +180,7 @@ class InvoiceCollector:
             'tax': 0.0,
             'credits': 0.0,
             'status': 'finalized',
-            'fetched_at': datetime.utcnow().isoformat()
+            'fetched_at': datetime.now(timezone.utc).isoformat()
         }
         
         # Extract amounts if available
@@ -313,7 +316,7 @@ class InvoiceCollector:
             return {'saved': 0, 'updated': 0, 'errors': 0}
         
         try:
-            collection_ref = self.firestore_client.collection(config.FIRESTORE_COLLECTION)
+            collection_ref = self.firestore_client.collection(settings.firestore_collection)
             batch = self.firestore_client.batch()
             batch_count = 0
             stats = {'saved': 0, 'updated': 0, 'errors': 0}

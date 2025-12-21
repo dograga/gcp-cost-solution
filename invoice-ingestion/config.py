@@ -1,49 +1,124 @@
 """
 Configuration module for invoice-ingestion job.
-Loads environment-specific settings from .env files.
+Uses Pydantic for settings management and validation.
 """
 
 import os
-from pathlib import Path
+from typing import List, Optional, Union
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 from dotenv import load_dotenv
 
-# Determine environment
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+# Explicitly load .env files to ensure they are present in os.environ
+# This helps if Pydantic's env_file logic is bypassed or behaves differently
+# Load specific environment file FIRST (e.g., .env.dev) so it takes precedence over .env
+# but does NOT override system environment variables.
+env_name = os.getenv('APP_ENV') or os.getenv('ENVIRONMENT') or 'dev'
+load_dotenv(f".env.{env_name.lower()}")
+load_dotenv() # Load generic .env as fallback
 
-# Load environment-specific .env file
-env_file = Path(__file__).parent / f'.env.{ENVIRONMENT}'
-if env_file.exists():
-    load_dotenv(env_file)
-    print(f"Loaded configuration from {env_file}")
-else:
-    print(f"Warning: {env_file} not found, using environment variables or defaults")
+class Settings(BaseSettings):
+    """Base settings for the application."""
+    
+    # Application settings
+    app_name: str = "InvoiceIngestion"
+    environment: str = "dev"
+    log_level: str = "INFO"
+    
+    # GCP Project Configuration
+    # Try to get from GCP_PROJECT_ID, then GCP_PROJECT (standard in Cloud Run), else None
+    gcp_project_id: Optional[str] = Field(default=None, validation_alias="GCP_PROJECT_ID")
+    
+    @field_validator('gcp_project_id', mode='before')
+    @classmethod
+    def set_gcp_project_id(cls, v):
+        if v:
+            return v
+        return os.getenv("GCP_PROJECT")
+    
+    # Billing Account Configuration
+    billing_account_ids: Union[str, List[str]] = Field(default_factory=list, validation_alias="BILLING_ACCOUNT_IDS")
+    
+    @field_validator('billing_account_ids', mode='before')
+    @classmethod
+    def split_comma_separated_string(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [i.strip() for i in v.split(',') if i.strip()]
+        return v
+    
+    # Firestore Configuration
+    firestore_database: str = "cost-db"
+    firestore_collection: str = "invoices"
+    
+    # Invoice Processing Configuration
+    months_back: int = 12
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# GCP Project Configuration
-GCP_PROJECT_ID = os.environ.get('GCP_PROJECT_ID')
-if not GCP_PROJECT_ID:
-    raise ValueError(f"GCP_PROJECT_ID must be set in .env.{ENVIRONMENT} or environment variables")
+class LocalSettings(Settings):
+    """Local development settings."""
+    environment: str = "local"
+    log_level: str = "DEBUG"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.local",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Billing Account Configuration
-BILLING_ACCOUNT_IDS = os.environ.get('BILLING_ACCOUNT_IDS', '')
-BILLING_ACCOUNT_LIST = [acc.strip() for acc in BILLING_ACCOUNT_IDS.split(',') if acc.strip()] if BILLING_ACCOUNT_IDS else []
+class DevSettings(Settings):
+    """Development environment settings."""
+    environment: str = "dev"
+    log_level: str = "DEBUG"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.dev",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Firestore Configuration
-FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', 'cost-db')
-FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'invoices')
+class UatSettings(Settings):
+    """UAT environment settings."""
+    environment: str = "uat"
+    log_level: str = "INFO"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.uat",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Invoice Processing Configuration
-MONTHS_BACK = int(os.environ.get('MONTHS_BACK', '12'))
+class ProdSettings(Settings):
+    """Production environment settings."""
+    environment: str = "prod"
+    log_level: str = "WARNING"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env.prod",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-# Logging Configuration
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+def get_settings_class():
+    """Determine the settings class based on the environment."""
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "dev").lower()
+    settings_map = {
+        "local": LocalSettings,
+        "dev": DevSettings,
+        "uat": UatSettings,
+        "prod": ProdSettings
+    }
+    return settings_map.get(env, DevSettings)
 
-# Configuration summary
-CONFIG = {
-    'environment': ENVIRONMENT,
-    'gcp_project_id': GCP_PROJECT_ID,
-    'billing_account_ids': BILLING_ACCOUNT_LIST,
-    'firestore_database': FIRESTORE_DATABASE,
-    'firestore_collection': FIRESTORE_COLLECTION,
-    'months_back': MONTHS_BACK,
-    'log_level': LOG_LEVEL,
-}
+@lru_cache()
+def get_settings() -> Settings:
+    """Return a cached instance of the settings."""
+    settings_class = get_settings_class()
+    return settings_class()
