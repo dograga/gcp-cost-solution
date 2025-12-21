@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     
     # Invoice Processing Configuration
     months_back: int = 12
+    previous_month_only: bool = False
     
     model_config = SettingsConfigDict(
         env_file=".env",

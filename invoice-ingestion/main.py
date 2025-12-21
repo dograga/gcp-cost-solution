@@ -87,9 +87,16 @@ class InvoiceCollector:
         """
         Generate list of invoice months to fetch (YYYY-MM format).
         """
-        months = []
         current_date = datetime.now()
         
+        if settings.previous_month_only:
+            # Calculate previous month
+            prev_month_date = current_date - relativedelta(months=1)
+            prev_month_str = prev_month_date.strftime('%Y-%m')
+            logger.info(f"Previous month only mode: Fetching for {prev_month_str}")
+            return [prev_month_str]
+
+        months = []
         for i in range(settings.months_back):
             month_date = current_date - relativedelta(months=i)
             month_str = month_date.strftime('%Y-%m')
