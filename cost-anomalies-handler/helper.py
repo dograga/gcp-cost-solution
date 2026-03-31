@@ -15,56 +15,56 @@ firestore_client = firestore.Client(
     database=config.FIRESTORE_DATABASE
 )
 
-enrichment_client = firestore.Client(
+metadata_client = firestore.Client(
     project=config.GCP_PROJECT_ID,
-    database=config.ENRICHMENT_DATABASE
+    database=config.METADATA_DATABASE
 )
 
-class AnomalyEnricher:
+class AnomalyMetadataEnricher:
     """Enriches anomaly data with project metadata"""
     
     def __init__(self):
-        self.enrichment_cache = {}
+        self.metadata_cache = {}
         self.cache_loaded = False
     
-    def load_enrichment_data(self) -> Dict[str, Dict[str, Any]]:
+    def load_metadata(self) -> Dict[str, Dict[str, Any]]:
         """
-        Load project enrichment data from Firestore.
+        Load project metadata from Firestore.
         
         Returns:
-            Dictionary mapping project_id to enrichment data
+            Dictionary mapping project_id to metadata
         """
         if self.cache_loaded:
-            return self.enrichment_cache
+            return self.metadata_cache
         
-        logger.info("Loading project enrichment data from Firestore...")
+        logger.info("Loading project metadata from Firestore...")
         
         try:
-            collection_ref = enrichment_client.collection(config.ENRICHMENT_COLLECTION)
+            collection_ref = metadata_client.collection(config.METADATA_COLLECTION)
             docs = collection_ref.stream()
             
-            enrichment_data = {}
+            metadata = {}
             for doc in docs:
                 doc_dict = doc.to_dict()
-                project_id = doc_dict.get(config.ENRICHMENT_PROJECT_ID_FIELD)
+                project_id = doc_dict.get(config.METADATA_PROJECT_ID_FIELD)
                 
                 if project_id:
                     # Extract only the fields we need
-                    enrichment_fields = {}
-                    for field in config.ENRICHMENT_FIELD_LIST:
+                    metadata_fields = {}
+                    for field in config.METADATA_FIELD_LIST:
                         if field in doc_dict:
-                            enrichment_fields[field] = doc_dict[field]
+                            metadata_fields[field] = doc_dict[field]
                     
-                    if enrichment_fields:
-                        enrichment_data[project_id] = enrichment_fields
+                    if metadata_fields:
+                        metadata[project_id] = metadata_fields
             
-            self.enrichment_cache = enrichment_data
+            self.metadata_cache = metadata
             self.cache_loaded = True
-            logger.info(f"Loaded enrichment data for {len(enrichment_data)} projects")
-            return enrichment_data
+            logger.info(f"Loaded metadata for {len(metadata)} projects")
+            return metadata
             
         except Exception as e:
-            logger.error(f"Error loading enrichment data: {e}")
+            logger.error(f"Error loading metadata: {e}")
             return {}
     
     def enrich_anomaly(self, anomaly: Dict[str, Any]) -> Dict[str, Any]:
@@ -77,23 +77,23 @@ class AnomalyEnricher:
         Returns:
             Enriched anomaly dictionary
         """
-        enrichment_data = self.load_enrichment_data()
+        metadata = self.load_metadata()
         
         # Extract project_id from anomaly
         project_id = anomaly.get('project_id') or anomaly.get('projectId')
         
-        if project_id and project_id in enrichment_data:
-            # Add enrichment fields
-            for field, value in enrichment_data[project_id].items():
+        if project_id and project_id in metadata:
+            # Add metadata fields
+            for field, value in metadata[project_id].items():
                 anomaly[field] = value
             logger.debug(f"Enriched anomaly for project: {project_id}")
         else:
-            # Add null values for missing enrichment fields
-            for field in config.ENRICHMENT_FIELD_LIST:
+            # Add null values for missing metadata fields
+            for field in config.METADATA_FIELD_LIST:
                 if field not in anomaly:
                     anomaly[field] = None
             if project_id:
-                logger.warning(f"No enrichment data found for project: {project_id}")
+                logger.warning(f"No metadata found for project: {project_id}")
         
         # Add processing metadata
         anomaly['processed_at'] = datetime.utcnow().isoformat()
@@ -102,7 +102,7 @@ class AnomalyEnricher:
         return anomaly
 
 # Initialize enricher instance to be used by main.py
-enricher = AnomalyEnricher()
+enricher = AnomalyMetadataEnricher()
 
 def save_anomaly_to_firestore(anomaly: Dict[str, Any]) -> str:
     """

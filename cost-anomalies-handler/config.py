@@ -27,12 +27,12 @@ if not GCP_PROJECT_ID:
 FIRESTORE_DATABASE = os.environ.get('FIRESTORE_DATABASE', 'cost-db')
 FIRESTORE_COLLECTION = os.environ.get('FIRESTORE_COLLECTION', 'cost_anomalies')
 
-# Project Enrichment Configuration
-ENRICHMENT_DATABASE = os.environ.get('ENRICHMENT_DATABASE', 'dashboard')
-ENRICHMENT_COLLECTION = os.environ.get('ENRICHMENT_COLLECTION', 'projects')
-ENRICHMENT_PROJECT_ID_FIELD = os.environ.get('ENRICHMENT_PROJECT_ID_FIELD', 'project_id')
-ENRICHMENT_FIELDS = os.environ.get('ENRICHMENT_FIELDS', 'appcode,lob')
-ENRICHMENT_FIELD_LIST = [field.strip() for field in ENRICHMENT_FIELDS.split(',') if field.strip()]
+# Project Metadata Configuration
+METADATA_DATABASE = os.environ.get('METADATA_DATABASE', 'dashboard')
+METADATA_COLLECTION = os.environ.get('METADATA_COLLECTION', 'projects')
+METADATA_PROJECT_ID_FIELD = os.environ.get('METADATA_PROJECT_ID_FIELD', 'project_id')
+METADATA_FIELDS = os.environ.get('METADATA_FIELDS', 'appcode,lob')
+METADATA_FIELD_LIST = [field.strip() for field in METADATA_FIELDS.split(',') if field.strip()]
 
 # Logging Configuration
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
@@ -43,9 +43,9 @@ CONFIG = {
     'gcp_project_id': GCP_PROJECT_ID,
     'firestore_database': FIRESTORE_DATABASE,
     'firestore_collection': FIRESTORE_COLLECTION,
-    'enrichment_database': ENRICHMENT_DATABASE,
-    'enrichment_collection': ENRICHMENT_COLLECTION,
-    'enrichment_project_id_field': ENRICHMENT_PROJECT_ID_FIELD,
-    'enrichment_fields': ENRICHMENT_FIELD_LIST,
+    'metadata_database': METADATA_DATABASE,
+    'metadata_collection': METADATA_COLLECTION,
+    'metadata_project_id_field': METADATA_PROJECT_ID_FIELD,
+    'metadata_fields': METADATA_FIELD_LIST,
     'log_level': LOG_LEVEL,
 }

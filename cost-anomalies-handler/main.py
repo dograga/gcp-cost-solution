@@ -33,7 +33,7 @@ app = FastAPI(
 
 logger.info(f"Initialized Cost Anomaly Handler")
 logger.info(f"Firestore database: {config.FIRESTORE_DATABASE}")
-logger.info(f"Enrichment database: {config.ENRICHMENT_DATABASE}")
+logger.info(f"Metadata database: {config.METADATA_DATABASE}")
 
 
 @app.get("/")
@@ -52,9 +52,9 @@ async def health():
     return {
         "status": "healthy",
         "firestore_database": config.FIRESTORE_DATABASE,
-        "enrichment_database": config.ENRICHMENT_DATABASE,
-        "enrichment_cache_loaded": helper.enricher.cache_loaded,
-        "enrichment_projects_count": len(helper.enricher.enrichment_cache)
+        "metadata_database": config.METADATA_DATABASE,
+        "metadata_cache_loaded": helper.enricher.cache_loaded,
+        "metadata_projects_count": len(helper.enricher.metadata_cache)
     }
 
 
@@ -149,22 +149,22 @@ async def create_anomaly(anomaly: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/reload-enrichment")
-async def reload_enrichment():
-    """Reload enrichment data cache"""
+@app.post("/reload-metadata")
+async def reload_metadata():
+    """Reload metadata cache"""
     try:
         helper.enricher.cache_loaded = False
-        helper.enricher.enrichment_cache = {}
-        enrichment_data = helper.enricher.load_enrichment_data()
+        helper.enricher.metadata_cache = {}
+        metadata = helper.enricher.load_metadata()
         
         return {
             "status": "success",
-            "projects_loaded": len(enrichment_data),
-            "message": "Enrichment cache reloaded"
+            "projects_loaded": len(metadata),
+            "message": "Metadata cache reloaded"
         }
         
     except Exception as e:
-        logger.error(f"Error reloading enrichment data: {e}")
+        logger.error(f"Error reloading metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
