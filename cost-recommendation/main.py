@@ -7,7 +7,7 @@ and store them in Firestore. Runs daily to collect active recommendations.
 import os
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -490,6 +490,7 @@ class CostRecommendationCollector:
             'content': str(recommendation.content) if recommendation.content else None,
             'collected_at': datetime.utcnow().isoformat(),
             'updated_at': datetime.utcnow().isoformat(),
+            'last_updated': date.today().isoformat(),
             'app_code': metadata.get('app_code') if metadata else None,
             'bu_code': metadata.get('bu_code') if metadata else None,
         }
@@ -623,6 +624,53 @@ class CostRecommendationCollector:
             logger.error(f"Error saving to Firestore: {e}")
             raise
     
+    def cleanup_stale_recommendations(self):
+        """
+        Delete recommendations that have not been updated within the configured
+        retention window (stale_cleanup_days). Uses the 'last_updated' field
+        (YYYY-MM-DD string) to determine staleness.
+        """
+        cleanup_days = settings.stale_cleanup_days
+        cutoff_date = (date.today() - timedelta(days=cleanup_days)).isoformat()
+        
+        logger.info(
+            f"Starting stale recommendation cleanup: "
+            f"deleting records with last_updated before {cutoff_date} "
+            f"(older than {cleanup_days} days)"
+        )
+        
+        try:
+            collection_ref = self.db.collection(self.collection_name)
+            # Query for documents where last_updated is older than the cutoff
+            stale_query = collection_ref.where('last_updated', '<', cutoff_date)
+            stale_docs = stale_query.stream()
+            
+            batch = self.db.batch()
+            batch_count = 0
+            total_deleted = 0
+            
+            for doc in stale_docs:
+                batch.delete(doc.reference)
+                batch_count += 1
+                
+                if batch_count >= self.batch_size:
+                    batch.commit()
+                    total_deleted += batch_count
+                    logger.info(f"Deleted batch of {batch_count} stale documents. Total: {total_deleted}")
+                    batch = self.db.batch()
+                    batch_count = 0
+            
+            # Commit remaining deletes
+            if batch_count > 0:
+                batch.commit()
+                total_deleted += batch_count
+            
+            logger.info(f"Stale cleanup complete: deleted {total_deleted} recommendations")
+            
+        except Exception as e:
+            logger.error(f"Error during stale recommendation cleanup: {e}")
+            raise
+    
     def run(self, max_workers=None):
         """
         Main execution method to collect cost recommendations for all projects.
@@ -732,6 +780,9 @@ class CostRecommendationCollector:
                 f"cost recommendations from {len(projects)} projects "
                 f"in {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)"
             )
+            
+            # 3. Cleanup stale recommendations
+            self.cleanup_stale_recommendations()
             
         except Exception as e:
             logger.error(f"Error in cost recommendation collection: {e}")

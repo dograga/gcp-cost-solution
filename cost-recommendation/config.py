@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     max_workers: int = 10
     firestore_batch_size: int = 500
     
+    # Cleanup Configuration
+    stale_cleanup_days: int = 4
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
